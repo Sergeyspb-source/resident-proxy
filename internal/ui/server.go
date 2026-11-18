@@ -26,6 +26,7 @@ type Info struct {
 	Since       time.Time
 	MaxSessions int
 	PublicSocks string
+	Version     string
 }
 
 // KeyView — пользователь (ключ) с его лимитами и расходом.
@@ -64,6 +65,7 @@ type Controller interface {
 	SetKeyLimits(string, KeyLimits) (KeyView, error)
 	Autostart() bool
 	SetAutostart(bool) error
+	AgentInvite() (relay, token, publicSocks string)
 }
 
 type state struct {
@@ -75,6 +77,7 @@ type state struct {
 	MaxSessions int                       `json:"max_sessions"`
 	Keys        []KeyView                 `json:"keys"`
 	Autostart   bool                      `json:"autostart"`
+	Version     string                    `json:"version"`
 	Sessions    []monitor.SessionSnapshot `json:"sessions"`
 	InRate      float64                   `json:"in_rate"`
 	OutRate     float64                   `json:"out_rate"`
@@ -114,6 +117,7 @@ func Serve(addr string, reg *monitor.Registry, ctrl Controller, sys *monitor.Sys
 	mux.HandleFunc("/api/keys/reveal", h.revealKey)
 	mux.HandleFunc("/api/keys/invite", h.keyInvite)
 	mux.HandleFunc("/api/keys/limits", h.setKeyLimits)
+	mux.HandleFunc("/api/agent-invite", h.agentInvite)
 	mux.HandleFunc("/api/autostart", h.setAutostart)
 
 	// GPT: проверка Host и RemoteAddr закрывает DNS-rebinding на панель.
@@ -125,7 +129,7 @@ func Serve(addr string, reg *monitor.Registry, ctrl Controller, sys *monitor.Sys
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("Referrer-Policy", "no-referrer")
-		w.Header().Set("Content-Security-Policy", "default-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'")
+		w.Header().Set("Content-Security-Policy", "default-src 'self'; connect-src 'self' https://api.github.com; style-src 'unsafe-inline'; script-src 'unsafe-inline'")
 		mux.ServeHTTP(w, r)
 	})
 
@@ -203,6 +207,7 @@ func (h *handler) getState(w http.ResponseWriter, r *http.Request) {
 		MaxSessions: info.MaxSessions,
 		Keys:        keys,
 		Autostart:   h.ctrl.Autostart(),
+		Version:     info.Version,
 		Sessions:    snap.Sessions,
 		InRate:      snap.InRate,
 		OutRate:     snap.OutRate,
@@ -347,6 +352,25 @@ func (h *handler) keyInvite(w http.ResponseWriter, r *http.Request) {
 		"server":  server,
 		"key":     value,
 		"name":    name,
+	})
+}
+
+func (h *handler) agentInvite(w http.ResponseWriter, r *http.Request) {
+	if !checkPost(w, r) {
+		return
+	}
+	relay, token, publicSocks := h.ctrl.AgentInvite()
+	if relay == "" || token == "" {
+		http.Error(w, "у узла нет данных для приглашения", http.StatusBadRequest)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"version":      1,
+		"role":         "agent",
+		"relay":        relay,
+		"token":        token,
+		"public_socks": publicSocks,
 	})
 }
 

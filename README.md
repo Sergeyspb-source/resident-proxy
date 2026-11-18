@@ -48,6 +48,37 @@ go build -ldflags "-H=windowsgui -s -w" -o bin/proxy.exe ./cmd/proxy
 GOOS=linux GOARCH=amd64 go build -ldflags "-s -w" -o bin/exitnode ./cmd/proxy
 ```
 
+## Установка (Windows)
+
+Установщик — это тот же `proxy.exe` в режиме `setup`. Он копирует программу в
+`%LOCALAPPDATA%\exitnode`, создаёт ярлык на рабочем столе, запись в «Удаление
+программ» и, для узла, автозапуск.
+
+Узел выхода (у коллеги):
+
+```
+proxy.exe setup --agent --invite agent.exitnode
+```
+
+Приглашение узла скачивается в панели: «Настройки» → «Скачать agent.exitnode».
+Передайте коллеге `proxy.exe` и этот файл.
+
+Клиент:
+
+```
+proxy.exe setup --client
+```
+
+После этого файлы `.exitnode` открываются клиентом: достаточно дважды щёлкнуть
+приглашение. Удаление:
+
+```
+proxy.exe setup --uninstall
+```
+
+Подписи кода нет, поэтому при первом запуске SmartScreen покажет «Неизвестный
+издатель» → «Подробнее» → «Выполнить».
+
 ## VPS2 — шлюз
 
 Нужен TLS-сертификат на домен, который указывает на VPS2 (Let's Encrypt).

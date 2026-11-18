@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -11,10 +12,12 @@ import (
 	"strings"
 
 	"exitnode/internal/agent"
+	"exitnode/internal/buildinfo"
 	"exitnode/internal/client"
 	"exitnode/internal/clientui"
 	"exitnode/internal/desktop"
 	"exitnode/internal/relay"
+	"exitnode/internal/setup"
 )
 
 func main() {
@@ -32,6 +35,8 @@ func main() {
 		runAgent(os.Args[2:])
 	case "client":
 		runClient(os.Args[2:])
+	case "setup":
+		runSetup(os.Args[2:])
 	case "help", "-h", "--help":
 		usage()
 	default:
@@ -46,8 +51,9 @@ func usage() {
   exitnode relay   запуск на VPS2 (шлюз)
   exitnode agent   запуск на ПК коллеги (узел выхода)
   exitnode client  локальный SOCKS5 для того, кто пользуется узлом
+  exitnode setup   установка, ярлыки, автозапуск, удаление
 
-Флаги: exitnode relay -h  /  exitnode agent -h  /  exitnode client -h
+Флаги: exitnode relay -h  /  exitnode agent -h  /  exitnode client -h  /  exitnode setup -h
 `)
 	os.Exit(2)
 }
@@ -117,10 +123,39 @@ func runAgent(args []string) {
 	fs.Int64Var(&cfg.RateKBps, "rate-kbps", 0, "общий лимит скорости, КБ/с (0 = без лимита)")
 	fs.StringVar(&cfg.Domains, "allow-domains", "", "разрешённые домены через запятую (пусто = любые)")
 	fs.IntVar(&cfg.MaxSessions, "max-sessions", 8, "максимум одновременных подключений")
+	configPath := fs.String("config", "", "JSON с relay/token/name/public_socks")
 	fs.StringVar(&cfg.ServerName, "server-name", "", "имя сервера в TLS-сертификате")
 	fs.BoolVar(&cfg.Insecure, "insecure", false, "не проверять TLS-сертификат (только для теста)")
 	fs.BoolVar(&cfg.NoTLS, "plain", false, "без TLS (только для локального теста)")
 	_ = fs.Parse(args)
+
+	if *configPath != "" {
+		b, err := os.ReadFile(*configPath)
+		if err != nil {
+			log.Fatalf("конфиг: %v", err)
+		}
+		var c struct {
+			Relay       string `json:"relay"`
+			Token       string `json:"token"`
+			Name        string `json:"name"`
+			PublicSocks string `json:"public_socks"`
+		}
+		if err := json.Unmarshal(b, &c); err != nil {
+			log.Fatalf("конфиг: %v", err)
+		}
+		if cfg.RelayAddr == "" {
+			cfg.RelayAddr = c.Relay
+		}
+		if cfg.Token == "" {
+			cfg.Token = c.Token
+		}
+		if cfg.Name == "" {
+			cfg.Name = c.Name
+		}
+		if cfg.PublicSocks == "" {
+			cfg.PublicSocks = c.PublicSocks
+		}
+	}
 
 	if cfg.Token == "" && *tokenFile != "" {
 		b, err := os.ReadFile(*tokenFile)
@@ -133,6 +168,7 @@ func runAgent(args []string) {
 		fmt.Fprintln(os.Stderr, "нужны -relay и -token (или -token-file)")
 		os.Exit(2)
 	}
+	cfg.Version = buildinfo.Version
 	if cfg.NoTLS {
 		log.Println("ВНИМАНИЕ: TLS выключен (только для локального теста)")
 	}
@@ -260,4 +296,24 @@ func runClientGUI(cfg client.Config, invite string, trayMode bool) {
 		OnToggle:    func(bool) { app.Toggle() },
 		ToggleLabel: "Подключено",
 	})
+}
+
+func runSetup(args []string) {
+	fs := flag.NewFlagSet("setup", flag.ExitOnError)
+	var opts setup.Options
+	fs.BoolVar(&opts.Agent, "agent", false, "установить узел выхода")
+	fs.BoolVar(&opts.Client, "client", false, "установить клиент")
+	fs.StringVar(&opts.Invite, "invite", "", "файл приглашения узла")
+	fs.BoolVar(&opts.Uninstall, "uninstall", false, "удалить программу")
+	_ = fs.Parse(args)
+
+	msg, err := setup.Install(opts)
+	if err != nil {
+		log.Printf("установка: %v", err)
+		setup.Message("Ошибка: " + err.Error())
+		return
+	}
+	log.Printf("установка: %s", msg)
+	setup.Message(msg)
+	setup.FinishUninstall()
 }

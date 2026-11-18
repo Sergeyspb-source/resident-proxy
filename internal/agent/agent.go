@@ -50,6 +50,7 @@ type Config struct {
 	RateKBps    int64
 	Domains     string
 	PublicSocks string
+	Version     string
 	OnReady     func(url string)
 }
 
@@ -561,12 +562,18 @@ func (a *Agent) Info() ui.Info {
 		Since:       a.started,
 		MaxSessions: a.cfg.MaxSessions,
 		PublicSocks: a.cfg.PublicSocks,
+		Version:     a.cfg.Version,
 	}
 }
 
 func (a *Agent) SetEnabled(v bool) { a.enabled.Store(v) }
 
 func (a *Agent) KillAll() { a.reg.KillAll() }
+
+// AgentInvite отдаёт данные для установки ещё одного узла.
+func (a *Agent) AgentInvite() (relay, token, publicSocks string) {
+	return a.cfg.RelayAddr, a.cfg.Token, a.cfg.PublicSocks
+}
 
 // Autostart показывает и меняет запись в автозагрузке Windows.
 func (a *Agent) Autostart() bool { return desktop.AutostartEnabled() }
