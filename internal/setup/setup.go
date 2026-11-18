@@ -2,8 +2,13 @@ package setup
 
 // Options — что именно устанавливаем.
 type Options struct {
-	Agent     bool
-	Client    bool
-	Invite    string
-	Uninstall bool
+	Agent       bool
+	Client      bool
+	Uninstall   bool
+	Systemd     bool
+	Invite      string
+	Relay       string
+	TokenFile   string
+	PublicSocks string
+	Name        string
 }

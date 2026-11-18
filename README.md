@@ -88,21 +88,19 @@ proxy.exe setup --uninstall
 ssh -L 17890:127.0.0.1:17890 user@linux-host
 ```
 
-Автозапуск — systemd (пользовательский юнит):
+Автозапуск ставится одной командой:
 
-```ini
-[Unit]
-Description=exitnode agent
-After=network-online.target
-
-[Service]
-ExecStart=/home/user/agent agent -relay proxy.example.com:2083 -token-file /home/user/token -public-socks proxy.example.com:2084 -ui 127.0.0.1:17890
-Restart=always
-RestartSec=3
-
-[Install]
-WantedBy=default.target
 ```
+./exitnode setup --systemd --invite agent.exitnode
+```
+
+или без приглашения:
+
+```
+./exitnode setup --systemd --relay proxy.example.com:2083 --token-file ./token --public-socks proxy.example.com:2084 --name "Linux"
+```
+
+Удаление: `./exitnode setup --systemd --uninstall`.
 
 ## VPS2 — шлюз
 
@@ -273,6 +271,14 @@ proxy.exe client -server 10.8.0.1:1080 -key-file key.txt -tls -server-name proxy
 Если порт 1080 занят (например, Xray или другой прокси), клиент автоматически
 берёт следующий свободный в диапазоне 1081–1099 и показывает его в окне.
 Указывайте в браузере именно этот порт.
+
+На Linux оконный клиент открывается как страница в браузере:
+
+```
+./exitnode client -ui
+```
+
+Локальный порт выбирается автоматически, `Ctrl+C` останавливает клиент.
 
 Проверка из терминала:
 

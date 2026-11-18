@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -242,10 +243,6 @@ func runClient(args []string) {
 	}
 
 	if *uiMode || *invite != "" || *trayMode || (cfg.Server == "" && cfg.Key == "") {
-		if runtime.GOOS != "windows" {
-			fmt.Fprintln(os.Stderr, "окно клиента доступно только в Windows")
-			os.Exit(2)
-		}
 		runClientGUI(cfg, *invite, *trayMode)
 		return
 	}
@@ -283,7 +280,7 @@ func runClientGUI(cfg client.Config, invite string, trayMode bool) {
 	url := "http://127.0.0.1:17893/"
 	onReady := func(u string) {
 		log.Printf("окно клиента: %s", u)
-		if !trayMode {
+		if runtime.GOOS == "windows" && !trayMode {
 			desktop.OpenWindow(u)
 		}
 	}
@@ -293,6 +290,14 @@ func runClientGUI(cfg client.Config, invite string, trayMode bool) {
 			os.Exit(1)
 		}
 	}()
+
+	if runtime.GOOS != "windows" {
+		if !trayMode {
+			_ = exec.Command("xdg-open", url).Start()
+		}
+		log.Printf("клиент работает; остановите Ctrl+C")
+		select {}
+	}
 
 	desktop.Run(desktop.Hooks{
 		URL:         url,
@@ -310,6 +315,11 @@ func runSetup(args []string) {
 	fs.BoolVar(&opts.Client, "client", false, "установить клиент")
 	fs.StringVar(&opts.Invite, "invite", "", "файл приглашения узла")
 	fs.BoolVar(&opts.Uninstall, "uninstall", false, "удалить программу")
+	fs.BoolVar(&opts.Systemd, "systemd", false, "Linux: установить systemd-службу")
+	fs.StringVar(&opts.Relay, "relay", "", "Linux: адрес шлюза")
+	fs.StringVar(&opts.TokenFile, "token-file", "", "Linux: файл с токеном")
+	fs.StringVar(&opts.PublicSocks, "public-socks", "", "Linux: адрес SOCKS для приглашений")
+	fs.StringVar(&opts.Name, "name", "", "Linux: имя узла")
 	_ = fs.Parse(args)
 
 	msg, err := setup.Install(opts)

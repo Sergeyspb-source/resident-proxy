@@ -167,7 +167,8 @@ async function poll() {
   $("statusText").textContent = s.running ? "подключено" : "не подключён";
   $("listen").textContent = s.running ? s.listen : "—";
   const port = (s.listen || "127.0.0.1:1080").split(":").pop() || "1080";
-  $("cmd").textContent = 'chrome.exe --proxy-server="socks5://127.0.0.1:' + port + '" --force-webrtc-ip-handling-policy=disable_non_proxied_udp';
+  const bin = s.platform === "windows" ? "chrome.exe" : "google-chrome";
+  $("cmd").textContent = bin + ' --proxy-server="socks5://127.0.0.1:' + port + '" --force-webrtc-ip-handling-policy=disable_non_proxied_udp';
   $("in").textContent = fmt(s.in);
   $("out").textContent = fmt(s.out);
   $("connect").hidden = s.running;

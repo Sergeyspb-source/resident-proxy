@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -174,14 +175,15 @@ func freeListen() (string, error) {
 }
 
 type stateView struct {
-	Running bool   `json:"running"`
-	Listen  string `json:"listen"`
-	Server  string `json:"server"`
-	HasKey  bool   `json:"has_key"`
-	In      uint64 `json:"in"`
-	Out     uint64 `json:"out"`
-	Uptime  int64  `json:"uptime"`
-	Error   string `json:"error,omitempty"`
+	Running  bool   `json:"running"`
+	Listen   string `json:"listen"`
+	Server   string `json:"server"`
+	HasKey   bool   `json:"has_key"`
+	In       uint64 `json:"in"`
+	Out      uint64 `json:"out"`
+	Uptime   int64  `json:"uptime"`
+	Platform string `json:"platform"`
+	Error    string `json:"error,omitempty"`
 }
 
 func (a *App) state() stateView {
@@ -191,14 +193,15 @@ func (a *App) state() stateView {
 	last := a.last
 	a.mu.Unlock()
 	return stateView{
-		Running: st.Running,
-		Listen:  st.Listen,
-		Server:  st.Server,
-		HasKey:  hasKey,
-		In:      st.In,
-		Out:     st.Out,
-		Uptime:  int64(time.Since(st.Started).Seconds()),
-		Error:   last,
+		Running:  st.Running,
+		Listen:   st.Listen,
+		Server:   st.Server,
+		HasKey:   hasKey,
+		In:       st.In,
+		Out:      st.Out,
+		Uptime:   int64(time.Since(st.Started).Seconds()),
+		Platform: runtime.GOOS,
+		Error:    last,
 	}
 }
 
