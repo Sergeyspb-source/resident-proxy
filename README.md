@@ -55,7 +55,7 @@ GOOS=linux GOARCH=amd64 go build -ldflags "-s -w" -o bin/exitnode ./cmd/proxy
 ```
 ./exitnode relay \
   -socks 10.9.0.2:1080 \
-  -tunnel :8443 \
+  -tunnel :2053 \
   -cert /etc/letsencrypt/live/proxy.example.com/fullchain.pem \
   -key  /etc/letsencrypt/live/proxy.example.com/privkey.pem \
   -socks-tls \
@@ -64,7 +64,8 @@ GOOS=linux GOARCH=amd64 go build -ldflags "-s -w" -o bin/exitnode ./cmd/proxy
 
 - `-socks 10.9.0.2:1080` — адрес в туннеле до VPS1, а не `0.0.0.0`. Так порт
   физически недоступен из интернета.
-- `-tunnel :8443` — сюда подключаются агенты коллег.
+- `-tunnel :2053` — сюда подключаются агенты коллег. Порт можно любой свободный;
+  2053 взят потому, что 8443 часто занят VPN, а 2053 редко блокируется провайдерами.
 - `-socks-tls` — шифрует SOCKS5 тем же сертификатом. Без этого ключ клиента
   пошёл бы открытым текстом, поэтому вне `-dev` режим запрещён.
 - `-token-file` — файл с общим секретом агентов (минимум 32 символа).
@@ -79,7 +80,7 @@ Description=exitnode relay
 After=network.target
 
 [Service]
-ExecStart=/opt/exitnode/exitnode relay -socks 10.9.0.2:1080 -tunnel :8443 \
+ExecStart=/opt/exitnode/exitnode relay -socks 10.9.0.2:1080 -tunnel :2053 \
   -cert /etc/letsencrypt/live/proxy.example.com/fullchain.pem \
   -key /etc/letsencrypt/live/proxy.example.com/privkey.pem \
   -socks-tls -token-file /etc/exitnode/token
@@ -113,7 +114,7 @@ nft add rule ip nat prerouting ip daddr 10.8.0.1 tcp dport 1080 dnat to 10.9.0.2
 ## ПК коллеги — агент
 
 ```
-proxy.exe agent -relay proxy.example.com:8443 -token "длинный-случайный-токен" -name "Anna-Tallinn"
+proxy.exe agent -relay proxy.example.com:2053 -token "длинный-случайный-токен" -name "Anna-Tallinn"
 ```
 
 При запуске открывается окно-приложение (Edge или Chrome в режиме `--app`:

@@ -54,7 +54,7 @@ func runRelay(args []string) {
 	fs := flag.NewFlagSet("relay", flag.ExitOnError)
 	var cfg relay.Config
 	fs.StringVar(&cfg.SocksAddr, "socks", "127.0.0.1:1080", "адрес SOCKS5 (лучше адрес в туннеле до VPS1)")
-	fs.StringVar(&cfg.TunnelAddr, "tunnel", ":8443", "адрес, куда подключаются агенты")
+	fs.StringVar(&cfg.TunnelAddr, "tunnel", ":2053", "адрес, куда подключаются агенты")
 	fs.StringVar(&cfg.CertFile, "cert", "", "TLS-сертификат; пусто = без TLS (только для теста)")
 	fs.StringVar(&cfg.KeyFile, "key", "", "TLS-ключ")
 	fs.StringVar(&cfg.Token, "token", "", "общий токен агентов")
