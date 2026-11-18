@@ -1,0 +1,227 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Клиент — Узел выхода</title>
+<style>
+  :root {
+    --bg: #0b0d10; --panel: #14171c; --panel2: #1a1e25; --line: #242a33;
+    --text: #e8edf3; --muted: #8b95a3; --green: #43d17a; --red: #ef5b5b;
+    --blue: #5aa9ff; --amber: #e8b04b;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.45 "Segoe UI", system-ui, -apple-system, sans-serif; }
+  .wrap { max-width: 700px; margin: 0 auto; padding: 16px 14px 24px; }
+
+  header { display: flex; align-items: center; gap: 12px; }
+  .brand { font-size: 16px; font-weight: 600; }
+  .who { color: var(--muted); font-size: 12px; }
+  .status { margin-left: auto; display: inline-flex; align-items: center; gap: 8px;
+    padding: 5px 11px; border: 1px solid var(--line); border-radius: 999px;
+    font-size: 12px; color: var(--muted); background: var(--panel); }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+  .dot.on { background: var(--green); box-shadow: 0 0 0 3px rgba(67,209,122,.15); }
+  .dot.warn { background: var(--amber); }
+  .dot.off { background: var(--red); }
+
+  .card { background: var(--panel); border: 1px solid var(--line);
+    border-radius: 12px; padding: 13px; margin-top: 12px; }
+  .label { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .5px; }
+  .row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+
+  .field { margin-top: 10px; }
+  .field span { display: block; color: var(--muted); font-size: 12px; margin-bottom: 5px; }
+  input[type=text], input[type=password] {
+    width: 100%; background: var(--panel2); color: var(--text);
+    border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px;
+    font: 13px/1.4 "Segoe UI", system-ui, sans-serif; outline: none;
+  }
+  input:focus { border-color: #3b5b80; }
+  .actions { display: flex; gap: 10px; align-items: center; margin-top: 12px; flex-wrap: wrap; }
+
+  .primary { border: 0; background: var(--blue); color: #05121f; border-radius: 8px;
+    padding: 8px 16px; cursor: pointer; font: 600 12.5px "Segoe UI", system-ui, sans-serif; }
+  .primary:disabled { opacity: .5; cursor: default; }
+  .danger { border: 1px solid #49262b; background: #23151a; color: #ff9a9a;
+    border-radius: 8px; padding: 7px 14px; cursor: pointer; font: 500 12.5px inherit; }
+  .ghost { border: 1px solid var(--line); background: transparent; color: var(--text);
+    border-radius: 8px; padding: 6px 10px; cursor: pointer; font: 500 12px inherit; }
+  .ghost:hover { background: #1f242c; }
+
+  .big { font: 600 22px/1.2 "Segoe UI", system-ui, sans-serif; font-variant-numeric: tabular-nums; }
+  .sub { color: var(--muted); font-size: 12px; margin-top: 3px; font-variant-numeric: tabular-nums; }
+  .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 12px; }
+  .grid .card { margin-top: 0; }
+
+  .err { color: #ff9a9a; font-size: 12px; margin-top: 10px; white-space: pre-wrap; }
+  .ok { color: var(--green); font-size: 12px; margin-top: 10px; }
+  code { font-family: ui-monospace, Consolas, monospace; font-size: 11.5px;
+    background: #0f1512; padding: 2px 5px; border-radius: 5px; }
+  .note { color: var(--muted); font-size: 11.5px; margin-top: 8px; line-height: 1.5; }
+  .cmd { display: block; margin-top: 8px; padding: 8px 10px; background: #0f1512;
+    border-radius: 8px; word-break: break-all; color: var(--text); font-family: ui-monospace, Consolas, monospace; font-size: 11px; }
+  footer { color: var(--muted); font-size: 10.5px; margin-top: 14px; line-height: 1.5; }
+
+  @media (max-width: 560px) { .grid { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="brand">Клиент</div>
+    <div class="who">локальный прокси</div>
+    <div class="status"><span id="dot" class="dot"></span><span id="statusText">не подключён</span></div>
+  </header>
+
+  <div class="card">
+    <div class="row"><div class="label">Подключение</div><span id="savedHint" class="note" style="margin:0"></span></div>
+    <label class="field">
+      <span>Адрес шлюза</span>
+      <input id="server" type="text" placeholder="cdn.example.com:2084" autocomplete="off" spellcheck="false">
+    </label>
+    <label class="field">
+      <span>Ключ доступа</span>
+      <input id="key" type="password" placeholder="вставьте ключ или откройте приглашение" autocomplete="off">
+    </label>
+    <div class="actions">
+      <button id="connect" class="primary">Подключить</button>
+      <button id="disconnect" class="danger" hidden>Отключить</button>
+      <span id="actionNote" class="note" style="margin:0"></span>
+    </div>
+    <div id="error" class="err" hidden></div>
+  </div>
+
+  <div class="card">
+    <div class="row"><div class="label">Приглашение</div></div>
+    <div class="actions">
+      <input id="invite" type="file" accept=".exitnode,.json,application/json" style="display:none">
+      <button id="import" class="ghost">Открыть файл приглашения</button>
+      <span id="importNote" class="note" style="margin:0">файл содержит адрес и ключ</span>
+    </div>
+  </div>
+
+  <div class="grid">
+    <div class="card"><div class="label">Локальный прокси</div><div id="listen" class="big">—</div><div class="sub">для браузера</div></div>
+    <div class="card"><div class="label">Принято</div><div id="in" class="big">0 Б</div><div class="sub">от браузера</div></div>
+    <div class="card"><div class="label">Отдано</div><div id="out" class="big">0 Б</div><div class="sub">в браузер</div></div>
+  </div>
+
+  <div class="card">
+    <div class="label">Браузер</div>
+    <div class="note">Пока клиент подключён, браузер ходит через локальный прокси. Для Chrome или Edge запустите отдельное окно:</div>
+    <code class="cmd">chrome.exe --proxy-server="socks5://127.0.0.1:1080" --force-webrtc-ip-handling-policy=disable_non_proxied_udp</code>
+    <div class="note">Флаг WebRTC обязателен: без него браузер может выдать реальный IP в обход прокси.</div>
+  </div>
+
+  <footer>
+    Ключ равносилен паролю: не пересылайте его в открытых чатах. Программа не требует прав администратора.
+    Закрытие окна не останавливает прокси — он работает, пока иконка в трее; полный выход — через меню иконки.
+  </footer>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const fmt = (n) => {
+  n = Number(n) || 0;
+  if (n < 1024) return Math.round(n) + " Б";
+  const u = ["КБ", "МБ", "ГБ", "ТБ"]; let v = n / 1024, i = 0;
+  while (v >= 1024 && i < u.length - 1) { v /= 1024; i++; }
+  return v.toFixed(v >= 100 ? 0 : 1) + " " + u[i];
+};
+const dur = (s) => {
+  s = Math.max(0, Math.round(s));
+  if (s < 60) return s + " с";
+  const m = Math.floor(s / 60);
+  return m < 60 ? m + " мин" : Math.floor(m / 60) + " ч " + (m % 60) + " мин";
+};
+
+async function post(path, body) {
+  try {
+    const res = await fetch(path, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Requested-With": "exitnode" },
+      body: JSON.stringify(body || {}),
+    });
+    if (!res.ok) return { error: (await res.text()).trim() || "ошибка" };
+    return await res.json();
+  } catch (e) {
+    return { error: "окно не отвечает" };
+  }
+}
+
+let lastServer = "";
+
+async function poll() {
+  let s;
+  try {
+    s = await (await fetch("/api/state", { cache: "no-store" })).json();
+  } catch (e) {
+    $("dot").className = "dot off";
+    $("statusText").textContent = "окно не отвечает";
+    return;
+  }
+
+  $("dot").className = "dot " + (s.running ? "on" : "off");
+  $("statusText").textContent = s.running ? "подключено" : "не подключён";
+  $("listen").textContent = s.running ? s.listen : "—";
+  $("in").textContent = fmt(s.in);
+  $("out").textContent = fmt(s.out);
+  $("connect").hidden = s.running;
+  $("disconnect").hidden = !s.running;
+  $("server").disabled = s.running;
+  $("key").disabled = s.running;
+  $("savedHint").textContent = s.has_key && !s.running ? "ключ сохранён" : "";
+  $("key").placeholder = s.has_key ? "ключ сохранён — оставьте пустым" : "вставьте ключ или откройте приглашение";
+  if (s.server && s.server !== lastServer && document.activeElement !== $("server")) {
+    $("server").value = s.server;
+    lastServer = s.server;
+  }
+  const err = $("error");
+  if (s.error) { err.textContent = s.error; err.hidden = false; } else { err.hidden = true; }
+
+  if (s.running) {
+    $("actionNote").textContent = "работает " + dur(s.uptime);
+  } else {
+    $("actionNote").textContent = "";
+  }
+}
+
+$("connect").addEventListener("click", async () => {
+  $("connect").disabled = true;
+  const res = await post("/api/connect", { server: $("server").value, key: $("key").value });
+  $("connect").disabled = false;
+  if (res && res.error) { $("error").textContent = res.error; $("error").hidden = false; return; }
+  $("key").value = "";
+  poll();
+});
+
+$("disconnect").addEventListener("click", async () => {
+  $("disconnect").disabled = true;
+  await post("/api/disconnect");
+  $("disconnect").disabled = false;
+  poll();
+});
+
+$("import").addEventListener("click", () => $("invite").click());
+$("invite").addEventListener("change", async () => {
+  const f = $("invite").files && $("invite").files[0];
+  if (!f) return;
+  try {
+    const inv = JSON.parse(await f.text());
+    if (!inv.server || !inv.key) throw new Error("нет адреса или ключа");
+    $("server").value = inv.server;
+    $("key").value = inv.key;
+    $("importNote").textContent = "приглашение загружено: " + (inv.name || "без имени");
+    $("error").hidden = true;
+  } catch (e) {
+    $("importNote").textContent = "не удалось прочитать приглашение";
+  }
+});
+
+poll();
+setInterval(poll, 1000);
+</script>
+</body>
+</html>

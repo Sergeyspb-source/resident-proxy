@@ -7,10 +7,12 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"exitnode/internal/agent"
 	"exitnode/internal/client"
+	"exitnode/internal/clientui"
 	"exitnode/internal/desktop"
 	"exitnode/internal/relay"
 )
@@ -109,6 +111,7 @@ func runAgent(args []string) {
 	openWindow := true
 	fs.BoolVar(&openWindow, "open", true, "открывать окно при запуске")
 	fs.BoolVar(&cfg.TrayMode, "tray", false, "запускать только в трее, без окна")
+	fs.StringVar(&cfg.PublicSocks, "public-socks", "", "адрес SOCKS для приглашений, например cdn.example.com:2084")
 	fs.StringVar(&cfg.AllowPorts, "ports", "80,443", "разрешённые порты через запятую или any")
 	fs.Int64Var(&cfg.QuotaMB, "quota-mb", 0, "суточная квота трафика, МБ (0 = без лимита)")
 	fs.Int64Var(&cfg.RateKBps, "rate-kbps", 0, "общий лимит скорости, КБ/с (0 = без лимита)")
@@ -166,6 +169,7 @@ func runAgent(args []string) {
 
 	desktop.Run(desktop.Hooks{
 		URL:      uiURL,
+		Title:    "Узел выхода",
 		Enabled:  func() bool { return a.Info().Enabled },
 		OnToggle: a.SetEnabled,
 	})
@@ -183,6 +187,9 @@ func runClient(args []string) {
 	fs.StringVar(&cfg.ServerName, "server-name", "", "имя в TLS-сертификате шлюза")
 	fs.BoolVar(&cfg.Insecure, "insecure", false, "не проверять сертификат (только для теста)")
 	fs.BoolVar(&cfg.AllowRemote, "allow-remote", false, "разрешить слушать не только localhost")
+	uiMode := fs.Bool("ui", false, "открыть окно клиента")
+	invite := fs.String("invite", "", "импортировать приглашение и подключиться")
+	trayMode := fs.Bool("tray", false, "открыть только в трее, без окна")
 	_ = fs.Parse(args)
 
 	if cfg.Key == "" && *keyFile != "" {
@@ -192,6 +199,16 @@ func runClient(args []string) {
 		}
 		cfg.Key = strings.TrimSpace(string(b))
 	}
+
+	if *uiMode || *invite != "" || *trayMode || (cfg.Server == "" && cfg.Key == "") {
+		if runtime.GOOS != "windows" {
+			fmt.Fprintln(os.Stderr, "окно клиента доступно только в Windows")
+			os.Exit(2)
+		}
+		runClientGUI(cfg, *invite, *trayMode)
+		return
+	}
+
 	if cfg.Server == "" || cfg.Key == "" {
 		fmt.Fprintln(os.Stderr, "нужны -server и -key (или -key-file)")
 		os.Exit(2)
@@ -199,4 +216,48 @@ func runClient(args []string) {
 	if err := client.Run(cfg, log.Default()); err != nil {
 		log.Fatal(err)
 	}
+}
+
+func runClientGUI(cfg client.Config, invite string, trayMode bool) {
+	path := ""
+	if dir, err := os.UserCacheDir(); err == nil {
+		_ = os.MkdirAll(filepath.Join(dir, "exitnode"), 0o700)
+		path = filepath.Join(dir, "exitnode", "client.json")
+	}
+
+	mgr := client.NewManager(log.Default())
+	app := clientui.NewApp(mgr, path, log.Default())
+
+	switch {
+	case invite != "":
+		if err := app.Import(invite); err != nil {
+			log.Printf("приглашение: %v", err)
+		}
+	case cfg.Server != "" && cfg.Key != "":
+		_ = app.Connect(cfg.Server, cfg.Key)
+	default:
+		_ = app.Connect("", "") // сохранённое приглашение
+	}
+
+	url := "http://127.0.0.1:17893/"
+	onReady := func(u string) {
+		log.Printf("окно клиента: %s", u)
+		if !trayMode {
+			desktop.OpenWindow(u)
+		}
+	}
+	go func() {
+		if err := clientui.Serve("127.0.0.1:17893", app, log.Default(), onReady); err != nil {
+			log.Printf("окно клиента остановлено: %v", err)
+			os.Exit(1)
+		}
+	}()
+
+	desktop.Run(desktop.Hooks{
+		URL:         url,
+		Title:       "Клиент — Узел выхода",
+		Enabled:     app.Running,
+		OnToggle:    func(bool) { app.Toggle() },
+		ToggleLabel: "Подключено",
+	})
 }

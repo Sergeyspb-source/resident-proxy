@@ -48,6 +48,7 @@ type Config struct {
 	QuotaMB     int64
 	RateKBps    int64
 	Domains     string
+	PublicSocks string
 	OnReady     func(url string)
 }
 
@@ -478,6 +479,7 @@ func (a *Agent) Info() ui.Info {
 		Enabled:     a.enabled.Load(),
 		Since:       a.started,
 		MaxSessions: a.cfg.MaxSessions,
+		PublicSocks: a.cfg.PublicSocks,
 	}
 }
 

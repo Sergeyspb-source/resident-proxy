@@ -5,9 +5,11 @@ import "sync"
 
 // Hooks — то, что оболочка вызывает при действиях пользователя.
 type Hooks struct {
-	URL      string
-	Enabled  func() bool
-	OnToggle func(bool)
+	URL         string
+	Title       string
+	Enabled     func() bool
+	OnToggle    func(bool)
+	ToggleLabel string
 }
 
 var launch struct {

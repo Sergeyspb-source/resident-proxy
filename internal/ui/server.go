@@ -25,6 +25,7 @@ type Info struct {
 	Enabled     bool
 	Since       time.Time
 	MaxSessions int
+	PublicSocks string
 }
 
 // KeyView — пользователь (ключ) с его лимитами и расходом.
@@ -111,6 +112,7 @@ func Serve(addr string, reg *monitor.Registry, ctrl Controller, sys *monitor.Sys
 	mux.HandleFunc("/api/keys/add", h.addKey)
 	mux.HandleFunc("/api/keys/remove", h.removeKey)
 	mux.HandleFunc("/api/keys/reveal", h.revealKey)
+	mux.HandleFunc("/api/keys/invite", h.keyInvite)
 	mux.HandleFunc("/api/keys/limits", h.setKeyLimits)
 	mux.HandleFunc("/api/autostart", h.setAutostart)
 
@@ -309,6 +311,43 @@ func (h *handler) revealKey(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "value": value})
+}
+
+func (h *handler) keyInvite(w http.ResponseWriter, r *http.Request) {
+	if !checkPost(w, r) {
+		return
+	}
+	var body struct {
+		ID string `json:"id"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&body); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	server := h.ctrl.Info().PublicSocks
+	if server == "" {
+		http.Error(w, "не задан адрес для приглашений (-public-socks)", http.StatusBadRequest)
+		return
+	}
+	value, err := h.ctrl.KeyValue(body.ID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+	name := "invite"
+	for _, k := range h.ctrl.Keys() {
+		if k.ID == body.ID {
+			name = k.Label
+			break
+		}
+	}
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"version": 1,
+		"server":  server,
+		"key":     value,
+		"name":    name,
+	})
 }
 
 func (h *handler) setKeyLimits(w http.ResponseWriter, r *http.Request) {

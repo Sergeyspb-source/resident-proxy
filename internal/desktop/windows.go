@@ -23,6 +23,7 @@ import (
 var win struct {
 	mu     sync.Mutex
 	url    string
+	title  string
 	openCh chan struct{}
 	isOpen atomic.Bool
 }
@@ -33,6 +34,9 @@ func init() {
 
 // Run показывает иконку в трее и блокирует главный поток до «Выход».
 func Run(h Hooks) {
+	win.mu.Lock()
+	win.title = h.Title
+	win.mu.Unlock()
 	go windowLoop()
 	systray.Run(func() { onReady(h) }, func() {})
 }
@@ -43,7 +47,11 @@ func onReady(h Hooks) {
 	systray.SetIcon(iconICO())
 
 	mOpen := systray.AddMenuItem("Открыть панель", "Показать окно программы")
-	mToggle := systray.AddMenuItemCheckbox("Узел включён", "Принимать подключения", h.Enabled != nil && h.Enabled())
+	toggleLabel := h.ToggleLabel
+	if toggleLabel == "" {
+		toggleLabel = "Узел включён"
+	}
+	mToggle := systray.AddMenuItemCheckbox(toggleLabel, "Принимать подключения", h.Enabled != nil && h.Enabled())
 	systray.AddSeparator()
 	mQuit := systray.AddMenuItem("Выход", "Остановить программу")
 
@@ -116,16 +124,20 @@ func windowLoop() {
 	for range win.openCh {
 		win.mu.Lock()
 		url := win.url
+		title := win.title
 		win.mu.Unlock()
 		if url == "" {
 			continue
+		}
+		if title == "" {
+			title = "Узел выхода"
 		}
 
 		win.isOpen.Store(true)
 		w := webview2.NewWithOptions(webview2.WebViewOptions{
 			AutoFocus: true,
 			WindowOptions: webview2.WindowOptions{
-				Title:  "Узел выхода",
+				Title:  title,
 				Width:  720,
 				Height: 660,
 				IconId: 1,
@@ -245,7 +257,7 @@ func iconICO() []byte {
 			case d <= 14*14:
 				r, g, b, a = 0x14, 0x17, 0x1c, 0xff
 			}
-			i := ((size - 1 - y) * size + x) * 4
+			i := ((size-1-y)*size + x) * 4
 			pixels[i+0] = b
 			pixels[i+1] = g
 			pixels[i+2] = r

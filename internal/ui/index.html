@@ -531,6 +531,17 @@ function buildUser(k) {
   const actions = el("div", "userActions");
   const save = el("button", "primary", "Сохранить");
   const saved = el("span", "saved", "");
+  const invite = el("button", "ghost", "Пригласить");
+  invite.addEventListener("click", async () => {
+    const res = await post("/api/keys/invite", { id: k.id });
+    if (!res || res.error) return;
+    const blob = new Blob([JSON.stringify(res, null, 2)], { type: "application/json" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = (res.name || "invite").replace(/[^\w.-]+/g, "_") + ".exitnode";
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  });
   const revoke = el("button", "danger", "Отозвать");
   save.addEventListener("click", async () => {
     save.disabled = true;
@@ -553,7 +564,7 @@ function buildUser(k) {
     lastUsersSig = "";
     poll();
   });
-  actions.append(save, revoke, saved);
+  actions.append(save, invite, revoke, saved);
 
   body.append(usage, domField, fields, actions);
   root.append(head, body);
