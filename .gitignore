@@ -1,0 +1,5 @@
+bin/
+*.log
+*.out
+*.pem
+pids.txt

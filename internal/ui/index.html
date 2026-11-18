@@ -1,0 +1,403 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Узел выхода</title>
+<style>
+  :root {
+    --bg: #0b0d10;
+    --panel: #14171c;
+    --panel2: #1a1e25;
+    --line: #242a33;
+    --text: #e8edf3;
+    --muted: #8b95a3;
+    --green: #43d17a;
+    --red: #ef5b5b;
+    --blue: #5aa9ff;
+    --amber: #e8b04b;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 14px/1.45 "Segoe UI", system-ui, -apple-system, sans-serif;
+  }
+  .wrap { max-width: 980px; margin: 0 auto; padding: 22px 18px 40px; }
+  header { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-bottom: 18px; }
+  .brand { font-size: 17px; font-weight: 600; letter-spacing: .2px; }
+  .who { color: var(--muted); font-size: 13px; }
+  .who b { color: var(--text); font-weight: 500; }
+  .status {
+    margin-left: auto; display: inline-flex; align-items: center; gap: 8px;
+    padding: 6px 12px; border: 1px solid var(--line); border-radius: 999px;
+    font-size: 12.5px; color: var(--muted); background: var(--panel);
+  }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+  .dot.on { background: var(--green); box-shadow: 0 0 0 3px rgba(67, 209, 122, .15); }
+  .dot.warn { background: var(--amber); }
+  .dot.off { background: var(--red); }
+
+  .hero {
+    display: flex; align-items: center; gap: 18px; flex-wrap: wrap;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 16px;
+    padding: 20px; margin-bottom: 14px;
+  }
+  .toggle {
+    border: 0; border-radius: 12px; padding: 16px 26px; cursor: pointer;
+    font: 600 15px/1 "Segoe UI", system-ui, sans-serif; color: #06120b;
+    background: var(--green); min-width: 190px; transition: filter .15s, background .15s;
+  }
+  .toggle:hover { filter: brightness(1.08); }
+  .toggle.off { background: var(--red); color: #1a0606; }
+  .toggle:disabled { opacity: .55; cursor: default; }
+  .heroTitle { font-size: 18px; font-weight: 600; }
+  .heroSub { color: var(--muted); font-size: 13px; margin-top: 3px; max-width: 560px; }
+
+  .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin-bottom: 14px; }
+  .card {
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 16px; padding: 16px;
+  }
+  .label { color: var(--muted); font-size: 12.5px; text-transform: uppercase; letter-spacing: .5px; }
+  .big { font: 600 26px/1.2 "Segoe UI", system-ui, sans-serif; margin-top: 8px; font-variant-numeric: tabular-nums; }
+  .sub { color: var(--muted); font-size: 12.5px; margin-top: 4px; font-variant-numeric: tabular-nums; }
+  .up { color: var(--blue); }
+  .down { color: var(--green); }
+
+  .chartCard { margin-bottom: 14px; }
+  .chart { display: flex; align-items: flex-end; gap: 2px; height: 92px; margin-top: 12px; }
+  .bar { flex: 1; min-height: 2px; background: #2f3947; border-radius: 2px 2px 0 0; transition: height .18s linear; }
+  .bar.hot { background: var(--blue); }
+
+  .row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
+  .row .label { margin: 0; }
+  table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+  th {
+    text-align: left; font: 500 11.5px/1 "Segoe UI", system-ui, sans-serif;
+    color: var(--muted); text-transform: uppercase; letter-spacing: .5px;
+    padding: 8px 8px; border-bottom: 1px solid var(--line);
+  }
+  td { padding: 9px 8px; border-bottom: 1px solid #1b2028; font-size: 13px; }
+  tr:last-child td { border-bottom: 0; }
+  td.num, th.num { text-align: right; }
+  .target { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .empty { color: var(--muted); font-size: 13px; padding: 16px 4px 4px; }
+
+  .danger {
+    border: 1px solid #49262b; background: #23151a; color: #ff9a9a;
+    border-radius: 9px; padding: 7px 12px; cursor: pointer; font: 500 12.5px inherit;
+  }
+  .danger:hover { background: #2c181f; }
+  .danger:disabled { opacity: .4; cursor: default; }
+
+  .res { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 14px; }
+  .meter { margin-top: 10px; }
+  .meterTop { display: flex; justify-content: space-between; font-size: 12.5px; color: var(--muted); }
+  .meterTop b { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
+  .track { height: 6px; background: #202631; border-radius: 4px; margin-top: 6px; overflow: hidden; }
+  .fill { height: 100%; width: 0%; background: var(--blue); border-radius: 4px; transition: width .3s; }
+  .fill.green { background: var(--green); }
+  .fill.amber { background: var(--amber); }
+
+  footer { color: var(--muted); font-size: 12px; margin-top: 22px; line-height: 1.6; }
+  footer b { color: var(--text); font-weight: 500; }
+  .note { color: var(--muted); font-size: 12px; margin-top: 8px; }
+
+  @media (max-width: 720px) {
+    .grid { grid-template-columns: 1fr; }
+    .res { grid-template-columns: 1fr; }
+    .status { margin-left: 0; }
+    .toggle { width: 100%; }
+    .hide-sm { display: none; }
+    .target { max-width: 150px; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <div class="brand">Узел выхода</div>
+    <div class="who">узел <b id="nodeName">—</b> · шлюз <b id="relayAddr">—</b></div>
+    <div class="status"><span id="statusDot" class="dot"></span><span id="statusText">проверка…</span></div>
+  </header>
+
+  <section class="hero">
+    <button id="toggle" class="toggle">Включить</button>
+    <div>
+      <div id="heroTitle" class="heroTitle">Загрузка…</div>
+      <div id="heroSub" class="heroSub">—</div>
+    </div>
+  </section>
+
+  <section class="grid">
+    <div class="card">
+      <div class="label">Принято от шлюза</div>
+      <div id="inRate" class="big down">0 Б/с</div>
+      <div id="inTotal" class="sub">всего 0 Б</div>
+    </div>
+    <div class="card">
+      <div class="label">Отдано шлюзу</div>
+      <div id="outRate" class="big up">0 Б/с</div>
+      <div id="outTotal" class="sub">всего 0 Б</div>
+    </div>
+    <div class="card">
+      <div class="label">Активных подключений</div>
+      <div id="sessCount" class="big">0</div>
+      <div id="sessLimit" class="sub">лимит 0</div>
+    </div>
+  </section>
+
+  <section class="card chartCard">
+    <div class="label">Суммарная скорость, последние 60 секунд</div>
+    <div id="chart" class="chart"></div>
+  </section>
+
+  <section class="card">
+    <div class="row">
+      <div class="label">Активные подключения</div>
+      <button id="kill" class="danger">Остановить все</button>
+    </div>
+    <table>
+      <thead>
+        <tr>
+          <th>#</th>
+          <th>Куда</th>
+          <th class="hide-sm">Клиент</th>
+          <th class="num">Время</th>
+          <th class="num">Принято</th>
+          <th class="num">Отдано</th>
+        </tr>
+      </thead>
+      <tbody id="rows"></tbody>
+    </table>
+    <div id="empty" class="empty">Подключений нет. Программа ничего не передаёт.</div>
+  </section>
+
+  <section class="res">
+    <div class="card">
+      <div class="label">Наш процесс</div>
+      <div class="meter">
+        <div class="meterTop"><span>Процессор</span><b id="cpuProc">0%</b></div>
+        <div class="track"><div id="cpuProcBar" class="fill"></div></div>
+      </div>
+      <div class="meter">
+        <div class="meterTop"><span>Память</span><b id="rssMB">0 МБ</b></div>
+        <div class="track"><div id="rssBar" class="fill green"></div></div>
+      </div>
+      <div class="meter">
+        <div class="meterTop"><span>Время работы</span><b id="uptime">0 мин</b></div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="label">Компьютер целиком</div>
+      <div class="meter">
+        <div class="meterTop"><span>Процессор</span><b id="cpuSys">0%</b></div>
+        <div class="track"><div id="cpuSysBar" class="fill amber"></div></div>
+      </div>
+      <div class="meter">
+        <div class="meterTop"><span>Память</span><b id="memSys">0%</b></div>
+        <div class="track"><div id="memSysBar" class="fill green"></div></div>
+      </div>
+      <div class="note">Разница между двумя блоками показывает, сколько ресурсов забирает именно эта программа.</div>
+    </div>
+  </section>
+
+  <footer>
+    <b>Вы всё видите.</b> Панель открыта только на этом компьютере. Программа не требует прав администратора,
+    не прописывается в автозапуск и не работает при закрытом окне. Пока узел включён, сайты видят IP этого
+    компьютера, а не IP клиента — поэтому каждое подключение отображается в таблице.
+  </footer>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+
+const T = {
+  on: "Включено",
+  off: "Выключено",
+  titleOn: "Узел работает",
+  titleOff: "Узел выключен",
+  subOn: "Трафик может идти через ваш IP. Ниже видно каждое подключение и скорость.",
+  subOff: "Программа ничего не пропускает через ваш компьютер.",
+  btnOn: "Выключить",
+  btnOff: "Включить",
+  connected: "Подключено к шлюзу",
+  connecting: "Нет связи со шлюзом",
+  offline: "Панель не отвечает",
+  limit: (n) => "лимит " + n,
+  session: (id) => "#" + id,
+  empty: "Подключений нет. Программа ничего не передаёт.",
+  total: (v) => "всего " + v,
+  uptimeMin: (m) => m + " мин",
+  uptimeHour: (h, m) => h + " ч " + m + " мин",
+};
+
+function fmtBytes(n) {
+  n = Number(n) || 0;
+  if (n < 1024) return Math.round(n) + " Б";
+  const units = ["КБ", "МБ", "ГБ", "ТБ"];
+  let v = n / 1024, i = 0;
+  while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
+  return v.toFixed(v >= 100 ? 0 : 1) + " " + units[i];
+}
+function fmtRate(n) { return fmtBytes(n) + "/с"; }
+function fmtDur(sec) {
+  sec = Math.max(0, Math.round(sec));
+  if (sec < 60) return sec + " с";
+  const m = Math.floor(sec / 60);
+  if (m < 60) return m + " мин";
+  return Math.floor(m / 60) + " ч " + (m % 60) + " мин";
+}
+function pct(v) { return Math.max(0, Math.min(100, Number(v) || 0)); }
+
+const bars = [];
+(function initChart() {
+  const el = $("chart");
+  for (let i = 0; i < 60; i++) {
+    const b = document.createElement("div");
+    b.className = "bar";
+    el.appendChild(b);
+    bars.push(b);
+  }
+})();
+
+function renderChart(history) {
+  const data = new Array(60).fill(0);
+  const src = history.slice(-60);
+  for (let i = 0; i < src.length; i++) data[60 - src.length + i] = src[i];
+  const max = Math.max(...data, 1);
+  for (let i = 0; i < 60; i++) {
+    const h = Math.round((data[i] / max) * 100);
+    bars[i].style.height = Math.max(2, h) + "%";
+    bars[i].classList.toggle("hot", data[i] > 0);
+  }
+}
+
+function renderRows(sessions) {
+  const body = $("rows");
+  body.replaceChildren();
+  $("empty").style.display = sessions.length ? "none" : "block";
+  for (const s of sessions) {
+    const tr = document.createElement("tr");
+
+    const id = document.createElement("td");
+    id.textContent = T.session(s.id);
+
+    const target = document.createElement("td");
+    target.className = "target";
+    target.textContent = s.host + ":" + s.port;
+    target.title = s.host + ":" + s.port;
+
+    const client = document.createElement("td");
+    client.className = "hide-sm";
+    client.textContent = s.client || "—";
+
+    const age = document.createElement("td");
+    age.className = "num";
+    age.textContent = fmtDur(s.age);
+
+    const down = document.createElement("td");
+    down.className = "num down";
+    down.textContent = fmtBytes(s.in);
+
+    const up = document.createElement("td");
+    up.className = "num up";
+    up.textContent = fmtBytes(s.out);
+
+    tr.append(id, target, client, age, down, up);
+    body.appendChild(tr);
+  }
+}
+
+let busy = false;
+
+async function post(path, body) {
+  await fetch(path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Requested-With": "exitnode" },
+    body: JSON.stringify(body || {}),
+  });
+}
+
+$("toggle").addEventListener("click", async () => {
+  if (busy) return;
+  busy = true;
+  $("toggle").disabled = true;
+  try {
+    const enabled = $("toggle").dataset.enabled === "1";
+    await post("/api/toggle", { enabled: !enabled });
+  } finally {
+    setTimeout(() => { busy = false; $("toggle").disabled = false; }, 400);
+  }
+});
+
+$("kill").addEventListener("click", async () => {
+  $("kill").disabled = true;
+  try { await post("/api/kill"); } finally { setTimeout(() => { $("kill").disabled = false; }, 400); }
+});
+
+function setStatus(kind, text) {
+  const dot = $("statusDot");
+  dot.className = "dot " + kind;
+  $("statusText").textContent = text;
+}
+
+async function poll() {
+  let s;
+  try {
+    const res = await fetch("/api/state", { cache: "no-store" });
+    s = await res.json();
+  } catch (e) {
+    setStatus("off", T.offline);
+    return;
+  }
+
+  $("nodeName").textContent = s.name || "—";
+  $("relayAddr").textContent = s.relay || "—";
+
+  if (!s.connected) setStatus("warn", T.connecting);
+  else if (s.enabled) setStatus("on", T.connected);
+  else setStatus("off", T.off);
+
+  const btn = $("toggle");
+  btn.dataset.enabled = s.enabled ? "1" : "0";
+  btn.textContent = s.enabled ? T.btnOn : T.btnOff;
+  btn.classList.toggle("off", !s.enabled);
+
+  $("heroTitle").textContent = s.enabled ? T.titleOn : T.titleOff;
+  $("heroSub").textContent = s.enabled ? T.subOn : T.subOff;
+
+  $("inRate").textContent = fmtRate(s.in_rate);
+  $("outRate").textContent = fmtRate(s.out_rate);
+  $("inTotal").textContent = T.total(fmtBytes(s.total_in));
+  $("outTotal").textContent = T.total(fmtBytes(s.total_out));
+  $("sessCount").textContent = s.sessions.length;
+  $("sessLimit").textContent = T.limit(s.max_sessions);
+  $("empty").textContent = s.enabled ? T.empty : T.subOff;
+
+  $("cpuProc").textContent = pct(s.cpu_proc).toFixed(1) + "%";
+  $("rssMB").textContent = Number(s.rss_mb || 0).toFixed(1) + " МБ";
+  $("cpuSys").textContent = pct(s.cpu_sys).toFixed(1) + "%";
+  $("memSys").textContent = pct(s.mem_sys).toFixed(1) + "%";
+
+  $("cpuProcBar").style.width = pct(s.cpu_proc) + "%";
+  $("rssBar").style.width = Math.min(100, (Number(s.rss_mb) || 0) / 5) + "%";
+  $("cpuSysBar").style.width = pct(s.cpu_sys) + "%";
+  $("memSysBar").style.width = pct(s.mem_sys) + "%";
+
+  const m = Math.floor((s.uptime || 0) / 60);
+  $("uptime").textContent = m < 60 ? T.uptimeMin(m) : T.uptimeHour(Math.floor(m / 60), m % 60);
+
+  renderChart(s.history || []);
+  renderRows(s.sessions || []);
+  $("kill").disabled = !s.sessions.length;
+}
+
+poll();
+setInterval(poll, 1000);
+</script>
+</body>
+</html>
