@@ -592,7 +592,10 @@ function renderKeys(keys) {
     const copy = document.createElement("button");
     copy.className = "ghost small";
     copy.textContent = "Копировать";
-    copy.addEventListener("click", () => copyText(k.value, copy));
+    copy.addEventListener("click", async () => {
+      const res = await post("/api/keys/reveal", { id: k.id });
+      if (res && res.value) copyText(res.value, copy);
+    });
 
     const revoke = document.createElement("button");
     revoke.className = "danger small";

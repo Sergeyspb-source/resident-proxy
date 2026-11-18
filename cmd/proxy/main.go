@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"exitnode/internal/agent"
 	"exitnode/internal/client"
@@ -56,19 +57,40 @@ func runRelay(args []string) {
 	fs.StringVar(&cfg.TunnelAddr, "tunnel", ":8443", "адрес, куда подключаются агенты")
 	fs.StringVar(&cfg.CertFile, "cert", "", "TLS-сертификат; пусто = без TLS (только для теста)")
 	fs.StringVar(&cfg.KeyFile, "key", "", "TLS-ключ")
-	fs.StringVar(&cfg.Token, "token", "", "общий токен агентов (обязателен)")
+	fs.StringVar(&cfg.Token, "token", "", "общий токен агентов")
+	tokenFile := fs.String("token-file", "", "файл с токеном (вместо -token)")
+	fs.BoolVar(&cfg.Dev, "dev", false, "тестовый режим: разрешить работу без TLS")
+	fs.BoolVar(&cfg.SocksTLS, "socks-tls", false, "шифровать SOCKS5 тем же сертификатом")
 	_ = fs.Parse(args)
 
+	if cfg.Token == "" && *tokenFile != "" {
+		b, err := os.ReadFile(*tokenFile)
+		if err != nil {
+			log.Fatalf("не прочитать токен: %v", err)
+		}
+		cfg.Token = strings.TrimSpace(string(b))
+	}
 	if cfg.Token == "" {
-		fmt.Fprintln(os.Stderr, "нужен -token")
+		fmt.Fprintln(os.Stderr, "нужен -token или -token-file")
+		os.Exit(2)
+	}
+	if !cfg.Dev && len(cfg.Token) < 32 {
+		fmt.Fprintln(os.Stderr, "токен короче 32 символов; для теста добавьте -dev")
 		os.Exit(2)
 	}
 	if (cfg.CertFile == "") != (cfg.KeyFile == "") {
 		fmt.Fprintln(os.Stderr, "-cert и -key задаются только вместе")
 		os.Exit(2)
 	}
+	if cfg.CertFile == "" && !cfg.Dev {
+		fmt.Fprintln(os.Stderr, "без -cert/-key туннель не шифруется; для теста добавьте -dev")
+		os.Exit(2)
+	}
 	if cfg.CertFile == "" {
-		log.Println("ВНИМАНИЕ: TLS выключен, туннель до агента не шифруется (только для локального теста)")
+		log.Println("ВНИМАНИЕ: TLS выключен, это допустимо только в -dev")
+	}
+	if !cfg.SocksTLS {
+		log.Println("ВНИМАНИЕ: SOCKS5 без TLS, это допустимо только в -dev")
 	}
 
 	if err := relay.New(cfg, log.Default()).Serve(); err != nil {
@@ -80,7 +102,8 @@ func runAgent(args []string) {
 	fs := flag.NewFlagSet("agent", flag.ExitOnError)
 	var cfg agent.Config
 	fs.StringVar(&cfg.RelayAddr, "relay", "", "адрес шлюза host:port (обязателен)")
-	fs.StringVar(&cfg.Token, "token", "", "токен агента (обязателен)")
+	fs.StringVar(&cfg.Token, "token", "", "токен агента")
+	tokenFile := fs.String("token-file", "", "файл с токеном (вместо -token)")
 	fs.StringVar(&cfg.Name, "name", "", "имя узла; по умолчанию имя компьютера")
 	fs.StringVar(&cfg.UIAddr, "ui", "127.0.0.1:17890", "адрес локальной панели")
 	openWindow := true
@@ -96,8 +119,15 @@ func runAgent(args []string) {
 	fs.BoolVar(&cfg.NoTLS, "plain", false, "без TLS (только для локального теста)")
 	_ = fs.Parse(args)
 
+	if cfg.Token == "" && *tokenFile != "" {
+		b, err := os.ReadFile(*tokenFile)
+		if err != nil {
+			log.Fatalf("не прочитать токен: %v", err)
+		}
+		cfg.Token = strings.TrimSpace(string(b))
+	}
 	if cfg.RelayAddr == "" || cfg.Token == "" {
-		fmt.Fprintln(os.Stderr, "нужны -relay и -token")
+		fmt.Fprintln(os.Stderr, "нужны -relay и -token (или -token-file)")
 		os.Exit(2)
 	}
 	if cfg.NoTLS {
@@ -146,12 +176,24 @@ func runClient(args []string) {
 	var cfg client.Config
 	fs.StringVar(&cfg.Listen, "listen", "127.0.0.1:1080", "локальный адрес SOCKS5 для браузера")
 	fs.StringVar(&cfg.Server, "server", "", "адрес шлюза host:port (обязателен)")
-	fs.StringVar(&cfg.Key, "key", "", "ключ доступа от владельца узла (обязателен)")
+	fs.StringVar(&cfg.Key, "key", "", "ключ доступа от владельца узла")
+	keyFile := fs.String("key-file", "", "файл с ключом (вместо -key)")
 	fs.StringVar(&cfg.User, "user", "", "логин для шлюза (необязательно)")
+	fs.BoolVar(&cfg.TLS, "tls", false, "шифровать соединение со шлюзом (нужно для VPS)")
+	fs.StringVar(&cfg.ServerName, "server-name", "", "имя в TLS-сертификате шлюза")
+	fs.BoolVar(&cfg.Insecure, "insecure", false, "не проверять сертификат (только для теста)")
+	fs.BoolVar(&cfg.AllowRemote, "allow-remote", false, "разрешить слушать не только localhost")
 	_ = fs.Parse(args)
 
+	if cfg.Key == "" && *keyFile != "" {
+		b, err := os.ReadFile(*keyFile)
+		if err != nil {
+			log.Fatalf("не прочитать ключ: %v", err)
+		}
+		cfg.Key = strings.TrimSpace(string(b))
+	}
 	if cfg.Server == "" || cfg.Key == "" {
-		fmt.Fprintln(os.Stderr, "нужны -server и -key")
+		fmt.Fprintln(os.Stderr, "нужны -server и -key (или -key-file)")
 		os.Exit(2)
 	}
 	if err := client.Run(cfg, log.Default()); err != nil {

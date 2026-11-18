@@ -5,6 +5,7 @@ package client
 
 import (
 	"bufio"
+	"crypto/tls"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -17,13 +18,28 @@ import (
 )
 
 type Config struct {
-	Listen string
-	Server string
-	Key    string
-	User   string
+	Listen      string
+	Server      string
+	Key         string
+	User        string
+	TLS         bool
+	ServerName  string
+	Insecure    bool
+	AllowRemote bool
 }
 
 func Run(cfg Config, logger *log.Logger) error {
+	if !cfg.AllowRemote {
+		host, _, err := net.SplitHostPort(cfg.Listen)
+		ip := net.ParseIP(host)
+		if err != nil || (host != "localhost" && (ip == nil || !ip.IsLoopback())) {
+			return errors.New("локальный SOCKS5 должен слушать 127.0.0.1; для LAN добавьте -allow-remote")
+		}
+	}
+	if !cfg.TLS {
+		logger.Printf("ВНИМАНИЕ: ключ передаётся без TLS (только для локальной сети)")
+	}
+
 	ln, err := net.Listen("tcp", cfg.Listen)
 	if err != nil {
 		return err
@@ -99,7 +115,25 @@ func dialUpstream(cfg Config, host string, port int) (net.Conn, error) {
 	}
 
 	d := net.Dialer{Timeout: 15 * time.Second}
-	c, err := d.Dial("tcp", cfg.Server)
+	var c net.Conn
+	var err error
+	if cfg.TLS {
+		serverName := cfg.ServerName
+		if serverName == "" {
+			host, _, splitErr := net.SplitHostPort(cfg.Server)
+			if splitErr != nil {
+				return nil, splitErr
+			}
+			serverName = host
+		}
+		c, err = tls.DialWithDialer(&d, "tcp", cfg.Server, &tls.Config{
+			MinVersion:         tls.VersionTLS13,
+			ServerName:         serverName,
+			InsecureSkipVerify: cfg.Insecure,
+		})
+	} else {
+		c, err = d.Dial("tcp", cfg.Server)
+	}
 	if err != nil {
 		return nil, err
 	}

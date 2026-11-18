@@ -2,6 +2,7 @@
 package monitor
 
 import (
+	"context"
 	"io"
 	"os"
 	"sort"
@@ -31,7 +32,8 @@ type Session struct {
 	inRate  float64
 	outRate float64
 
-	conn io.Closer
+	conn   io.Closer
+	cancel context.CancelFunc
 }
 
 func (s *Session) AddIn(n int64)  { s.in.Add(uint64(n)) }
@@ -39,6 +41,9 @@ func (s *Session) AddOut(n int64) { s.out.Add(uint64(n)) }
 func (s *Session) In() uint64     { return s.in.Load() }
 func (s *Session) Out() uint64    { return s.out.Load() }
 func (s *Session) Close() {
+	if s.cancel != nil {
+		s.cancel()
+	}
 	if s.conn != nil {
 		_ = s.conn.Close()
 	}
@@ -88,7 +93,7 @@ func NewRegistry() *Registry {
 	}
 }
 
-func (r *Registry) Add(client, host string, port int, conn io.Closer) *Session {
+func (r *Registry) Add(client, host string, port int, conn io.Closer, cancel context.CancelFunc) *Session {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.nextID++
@@ -99,6 +104,7 @@ func (r *Registry) Add(client, host string, port int, conn io.Closer) *Session {
 		Port:    port,
 		Started: time.Now(),
 		conn:    conn,
+		cancel:  cancel,
 	}
 	r.sessions[s.ID] = s
 	return s

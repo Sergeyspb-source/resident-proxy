@@ -137,20 +137,38 @@ func isBlocked(ip net.IP) bool {
 		ip.IsMulticast() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
 		return true
 	}
-	v4 := ip.To4()
-	if v4 == nil {
+	if v4 := ip.To4(); v4 != nil {
+		switch {
+		case v4[0] == 0:
+			return true
+		case v4[0] == 100 && v4[1] >= 64 && v4[1] <= 127: // 100.64.0.0/10 (CGNAT)
+			return true
+		case v4[0] == 192 && v4[1] == 0 && v4[2] == 0: // 192.0.0.0/24
+			return true
+		case v4[0] == 198 && (v4[1] == 18 || v4[1] == 19): // 198.18.0.0/15
+			return true
+		case v4[0] >= 240: // 240.0.0.0/4
+			return true
+		}
 		return false
 	}
+
+	// GPT: IPv6-диапазоны, через которые можно дотянуться до локалхоста
+	// или служебных адресов в обход обычной проверки.
+	v6 := ip.To16()
+	if v6 == nil {
+		return true
+	}
 	switch {
-	case v4[0] == 0:
+	case v6[0] == 0xfe && v6[1]&0xc0 == 0xc0: // fec0::/10 site-local
 		return true
-	case v4[0] == 100 && v4[1] >= 64 && v4[1] <= 127: // 100.64.0.0/10 (CGNAT)
+	case v6[0] == 0x00 && v6[1] == 0x64 && v6[2] == 0xff && v6[3] == 0x9b: // 64:ff9b::/96 NAT64
 		return true
-	case v4[0] == 192 && v4[1] == 0 && v4[2] == 0: // 192.0.0.0/24
+	case v6[0] == 0x20 && v6[1] == 0x02: // 2002::/16 6to4
 		return true
-	case v4[0] == 198 && (v4[1] == 18 || v4[1] == 19): // 198.18.0.0/15
+	case v6[0] == 0x20 && v6[1] == 0x01 && v6[2] == 0x00 && v6[3] == 0x00: // 2001::/32 Teredo
 		return true
-	case v4[0] >= 240: // 240.0.0.0/4
+	case v6[0] == 0x20 && v6[1] == 0x01 && v6[2] == 0x0d && v6[3] == 0xb8: // 2001:db8::/32
 		return true
 	}
 	return false

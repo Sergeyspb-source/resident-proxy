@@ -88,14 +88,33 @@ func WriteJSON(w io.Writer, v any) error {
 }
 
 func ReadJSON(r *bufio.Reader, v any) error {
-	line, err := r.ReadBytes('\n')
+	line, err := readControlLine(r)
 	if err != nil {
 		return err
 	}
-	if len(line) > maxControlLine {
-		return fmt.Errorf("служебная строка слишком длинная")
-	}
 	return json.Unmarshal(line, v)
+}
+
+// readControlLine читает строку с жёстким лимитом.
+// GPT: ReadBytes('\n') рос без ограничения — до проверки лимита,
+// поэтому одно соединение без перевода строки могло съесть память.
+func readControlLine(r *bufio.Reader) ([]byte, error) {
+	buf := make([]byte, 0, 256)
+	for {
+		chunk, err := r.ReadSlice('\n')
+		if len(buf)+len(chunk) > maxControlLine {
+			return nil, fmt.Errorf("служебная строка слишком длинная")
+		}
+		buf = append(buf, chunk...)
+		switch err {
+		case nil:
+			return buf, nil
+		case bufio.ErrBufferFull:
+			continue
+		default:
+			return nil, err
+		}
+	}
 }
 
 // BufConn сохраняет буферизованный reader: после чтения служебной строки
@@ -112,11 +131,15 @@ func NewBufConn(c net.Conn) *BufConn {
 func (b *BufConn) Read(p []byte) (int, error) { return b.R.Read(p) }
 
 // MuxConfig — общие настройки yamux для обеих сторон.
-// GPT: окно увеличено до 4 МиБ, иначе на каналах с большой задержкой
-// скорость упирается в размер окна, а не в канал.
+// GPT: окно уменьшено до 1 МиБ и backlog до 64, чтобы поток с нечитаемыми
+// данными не мог занять гигабайты памяти; таймаут открытия потока
+// не даёт OpenStream висеть при переполненном backlog.
 func MuxConfig() *yamux.Config {
 	cfg := yamux.DefaultConfig()
-	cfg.MaxStreamWindowSize = 4 << 20
+	cfg.MaxStreamWindowSize = 1 << 20
+	cfg.AcceptBacklog = 64
+	cfg.StreamOpenTimeout = 15 * time.Second
+	cfg.StreamCloseTimeout = 10 * time.Second
 	cfg.EnableKeepAlive = true
 	cfg.KeepAliveInterval = 20 * time.Second
 	cfg.LogOutput = io.Discard

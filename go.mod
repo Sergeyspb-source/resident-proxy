@@ -2,6 +2,8 @@ module exitnode
 
 go 1.26.0
 
+toolchain go1.26.11
+
 require (
 	fyne.io/systray v1.12.2
 	github.com/hashicorp/yamux v0.1.2

@@ -4,9 +4,11 @@ package ui
 import (
 	_ "embed"
 	"encoding/json"
+	"errors"
 	"log"
 	"net"
 	"net/http"
+	"strings"
 	"time"
 
 	"exitnode/internal/monitor"
@@ -54,6 +56,7 @@ type Controller interface {
 	Keys() []KeyView
 	AddKey(string) (KeyView, error)
 	RemoveKey(string) error
+	KeyValue(string) (string, error)
 	Autostart() bool
 	SetAutostart(bool) error
 }
@@ -88,13 +91,13 @@ type handler struct {
 }
 
 func Serve(addr string, reg *monitor.Registry, ctrl Controller, sys *monitor.System, logger *log.Logger, onReady func(url string)) error {
+	if !isLoopback(addr) {
+		return errors.New("панель должна слушать только 127.0.0.1; удалённый доступ запрещён")
+	}
+
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		return err
-	}
-
-	if !isLoopback(addr) {
-		logger.Printf("ВНИМАНИЕ: панель слушает не только localhost (%s)", addr)
 	}
 
 	h := &handler{reg: reg, sys: sys, ctrl: ctrl}
@@ -106,17 +109,54 @@ func Serve(addr string, reg *monitor.Registry, ctrl Controller, sys *monitor.Sys
 	mux.HandleFunc("/api/limits", h.setLimits)
 	mux.HandleFunc("/api/keys/add", h.addKey)
 	mux.HandleFunc("/api/keys/remove", h.removeKey)
+	mux.HandleFunc("/api/keys/reveal", h.revealKey)
 	mux.HandleFunc("/api/autostart", h.setAutostart)
+
+	// GPT: проверка Host и RemoteAddr закрывает DNS-rebinding на панель.
+	// Без неё страница evil.com могла переехать на 127.0.0.1 и прочитать ключи.
+	guard := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !validRequest(r) {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+		w.Header().Set("X-Frame-Options", "DENY")
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("Referrer-Policy", "no-referrer")
+		w.Header().Set("Content-Security-Policy", "default-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'")
+		mux.ServeHTTP(w, r)
+	})
 
 	if onReady != nil {
 		onReady("http://" + displayAddr(ln.Addr().String()) + "/")
 	}
 
 	srv := &http.Server{
-		Handler:           mux,
+		Handler:           guard,
 		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       15 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       60 * time.Second,
+		MaxHeaderBytes:    16 << 10,
 	}
 	return srv.Serve(ln)
+}
+
+func validRequest(r *http.Request) bool {
+	host := r.Host
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+	host = strings.Trim(host, "[]")
+	if host != "127.0.0.1" && host != "localhost" && host != "::1" {
+		return false
+	}
+
+	remote, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return false
+	}
+	ip := net.ParseIP(remote)
+	return ip != nil && ip.IsLoopback()
 }
 
 func (h *handler) index(w http.ResponseWriter, r *http.Request) {
@@ -273,6 +313,26 @@ func (h *handler) setAutostart(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write([]byte(`{"ok":true}`))
 }
 
+func (h *handler) revealKey(w http.ResponseWriter, r *http.Request) {
+	if !checkPost(w, r) {
+		return
+	}
+	var body struct {
+		ID string `json:"id"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&body); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	value, err := h.ctrl.KeyValue(body.ID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "value": value})
+}
+
 func checkPost(w http.ResponseWriter, r *http.Request) bool {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -290,8 +350,8 @@ func isLoopback(addr string) bool {
 	if err != nil {
 		return false
 	}
-	if host == "" || host == "localhost" {
-		return false
+	if host == "localhost" {
+		return true
 	}
 	ip := net.ParseIP(host)
 	return ip != nil && ip.IsLoopback()

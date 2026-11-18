@@ -10,6 +10,8 @@ import (
 	"net"
 	"time"
 
+	"github.com/hashicorp/yamux"
+
 	"exitnode/internal/protocol"
 )
 
@@ -46,8 +48,16 @@ func (r *Relay) serveSocks(ln net.Listener) error {
 // GPT: домен передаётся агенту как есть (remote DNS), чтобы адрес резолвил
 // узел выхода, а не клиент — иначе получаем DNS-leak и неверную геолокацию.
 func (r *Relay) handleSocks(c net.Conn) {
+	select {
+	case r.socksSem <- struct{}{}:
+		defer func() { <-r.socksSem }()
+	default:
+		_ = c.Close()
+		return
+	}
+
 	defer c.Close()
-	_ = c.SetDeadline(time.Now().Add(30 * time.Second))
+	_ = c.SetDeadline(time.Now().Add(15 * time.Second))
 	br := bufio.NewReader(c)
 
 	head := make([]byte, 2)
@@ -80,7 +90,7 @@ func (r *Relay) handleSocks(c net.Conn) {
 	link, label, found := r.lookupKey(keyHash(pass))
 	if !found {
 		_, _ = c.Write([]byte{1, 1})
-		r.log.Printf("SOCKS: неизвестный ключ %s (логин %q) от %s", keyHash(pass), user, c.RemoteAddr())
+		r.log.Printf("SOCKS: неизвестный ключ (логин %q) от %s", user, c.RemoteAddr())
 		return
 	}
 	if _, err := c.Write([]byte{1, 0}); err != nil {
@@ -119,7 +129,7 @@ func (r *Relay) handleSocks(c net.Conn) {
 			code = byte(oe.Code)
 		}
 		socksReply(c, code)
-		r.log.Printf("SOCKS %s:%d: %v", host, port, err)
+		r.log.Printf("SOCKS %q:%d: %v", host, port, err)
 		return
 	}
 	if err := socksReplyOK(c); err != nil {
@@ -132,9 +142,33 @@ func (r *Relay) handleSocks(c net.Conn) {
 }
 
 func (r *Relay) open(link *agentLink, req protocol.OpenRequest) (net.Conn, error) {
-	st, err := link.sess.OpenStream()
-	if err != nil {
-		return nil, err
+	type result struct {
+		st  *yamux.Stream
+		err error
+	}
+
+	// OpenStream может заблокироваться при переполненном backlog,
+	// поэтому открываем поток асинхронно и ограничиваем ожидание.
+	ch := make(chan result, 1)
+	go func() {
+		st, err := link.sess.OpenStream()
+		ch <- result{st: st, err: err}
+	}()
+
+	var st *yamux.Stream
+	select {
+	case res := <-ch:
+		if res.err != nil {
+			return nil, res.err
+		}
+		st = res.st
+	case <-time.After(10 * time.Second):
+		go func() {
+			if res := <-ch; res.st != nil {
+				_ = res.st.Close()
+			}
+		}()
+		return nil, errors.New("таймаут открытия потока")
 	}
 
 	st.SetDeadline(time.Now().Add(25 * time.Second))

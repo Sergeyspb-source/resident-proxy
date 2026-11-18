@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	mrand "math/rand/v2"
 	"net"
 	"os"
 	"path/filepath"
@@ -77,6 +78,10 @@ type Agent struct {
 	limDirty    bool
 	quotaLogged bool
 	ticks       int
+
+	inFlight  atomic.Int32
+	keysDirty atomic.Bool
+	saveMu    sync.Mutex
 }
 
 func New(cfg Config, logger *log.Logger) (*Agent, error) {
@@ -110,7 +115,16 @@ func New(cfg Config, logger *log.Logger) (*Agent, error) {
 	}
 
 	if a.limPath != "" {
-		if st, err := limits.Load(a.limPath); err == nil {
+		migrated := false
+		st, err := limits.Load(a.limPath)
+		if err != nil && a.limPath != legacyStatePath() {
+			if old, oldErr := limits.Load(legacyStatePath()); oldErr == nil {
+				st, err = old, nil
+				a.limDirty = true
+				migrated = true
+			}
+		}
+		if err == nil {
 			a.limits = st.Values
 			a.used = st.Used
 			a.usedMonth = st.UsedMonth
@@ -121,6 +135,14 @@ func New(cfg Config, logger *log.Logger) (*Agent, error) {
 			if st.Month != "" {
 				a.usedMonthAt = st.Month
 			}
+		} else {
+			a.log.Printf("состояние не загружено: %v", err)
+		}
+		if migrated {
+			// Переносим состояние в приватный каталог и убираем старую копию
+			// с ключами из папки программы.
+			a.flushLimits()
+			_ = os.Remove(legacyStatePath())
 		}
 	}
 
@@ -135,8 +157,20 @@ func New(cfg Config, logger *log.Logger) (*Agent, error) {
 	return a, nil
 }
 
-// statePath хранит настройки рядом с exe, чтобы они переживали перезапуск.
+// statePath хранит состояние в приватном каталоге пользователя.
+// GPT: рядом с exe файл мог оказаться в Downloads или Program Files,
+// где права наследуются от каталога и ключи читаются другими пользователями.
 func statePath() string {
+	if dir, err := os.UserCacheDir(); err == nil {
+		base := filepath.Join(dir, "exitnode")
+		if err := os.MkdirAll(base, 0o700); err == nil {
+			return filepath.Join(base, "agent-state.json")
+		}
+	}
+	return legacyStatePath()
+}
+
+func legacyStatePath() string {
 	exe, err := os.Executable()
 	if err != nil {
 		return ""
@@ -166,6 +200,9 @@ func (a *Agent) tickLoop() {
 		a.reg.Tick()
 		a.sys.Sample()
 		a.ticks++
+		if a.ticks%10 == 0 {
+			a.notifyKeys()
+		}
 		if a.ticks%5 == 0 {
 			a.flushLimits()
 		}
@@ -184,7 +221,11 @@ func (a *Agent) connectLoop() {
 		if time.Since(start) > 30*time.Second {
 			backoff = time.Second
 		}
-		time.Sleep(backoff)
+		delay := backoff
+		if half := int64(backoff / 2); half > 0 {
+			delay += time.Duration(mrand.Int64N(half))
+		}
+		time.Sleep(delay)
 		backoff *= 2
 		if backoff > 30*time.Second {
 			backoff = 30 * time.Second
@@ -201,16 +242,18 @@ func (a *Agent) connectOnce() error {
 	defer raw.Close()
 
 	if !a.cfg.NoTLS {
-		cfg := &tls.Config{
-			MinVersion:         tls.VersionTLS12,
-			InsecureSkipVerify: a.cfg.Insecure,
+		serverName, err := tlsServerName(a.cfg.RelayAddr, a.cfg.ServerName)
+		if err != nil {
+			return err
 		}
-		if a.cfg.ServerName != "" {
-			cfg.ServerName = a.cfg.ServerName
+		cfg := &tls.Config{
+			MinVersion:         tls.VersionTLS13,
+			ServerName:         serverName,
+			InsecureSkipVerify: a.cfg.Insecure,
 		}
 		tc := tls.Client(raw, cfg)
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-		err := tc.HandshakeContext(ctx)
+		err = tc.HandshakeContext(ctx)
 		cancel()
 		if err != nil {
 			return fmt.Errorf("TLS: %w", err)
@@ -261,6 +304,23 @@ func (a *Agent) connectOnce() error {
 	}
 }
 
+// tlsServerName берёт имя из адреса шлюза, если флаг не задан.
+// GPT: tls.Client не подставляет имя хоста сам, и без ServerName
+// проверка сертификата сводится к проверке цепочки без имени.
+func tlsServerName(relayAddr, override string) (string, error) {
+	if override != "" {
+		return override, nil
+	}
+	host, _, err := net.SplitHostPort(relayAddr)
+	if err != nil {
+		return "", fmt.Errorf("не разобрать адрес шлюза: %w", err)
+	}
+	if host == "" {
+		return "", errors.New("пустой адрес шлюза")
+	}
+	return host, nil
+}
+
 func (a *Agent) setSession(s *yamux.Session) {
 	a.mu.Lock()
 	a.sess = s
@@ -275,7 +335,18 @@ func (a *Agent) connected() bool {
 
 // handleStream обслуживает одну сессию: проверка, соединение с целью, передача байтов.
 func (a *Agent) handleStream(st *yamux.Stream) {
+	n := a.inFlight.Add(1)
+	defer a.inFlight.Add(-1)
+
 	bc := protocol.NewBufConn(st)
+	if int(n) > a.cfg.MaxSessions {
+		_ = protocol.WriteJSON(bc, protocol.Reply{
+			Code:  protocol.CodeNotAllowed,
+			Error: "узел перегружен",
+		})
+		st.Close()
+		return
+	}
 	_ = st.SetReadDeadline(time.Now().Add(15 * time.Second))
 
 	var req protocol.OpenRequest
@@ -300,15 +371,6 @@ func (a *Agent) handleStream(st *yamux.Stream) {
 		st.Close()
 		return
 	}
-	if a.reg.Count() >= a.cfg.MaxSessions {
-		_ = protocol.WriteJSON(bc, protocol.Reply{
-			Code:  protocol.CodeNotAllowed,
-			Error: "достигнут лимит одновременных подключений",
-		})
-		st.Close()
-		return
-	}
-
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 
@@ -319,7 +381,10 @@ func (a *Agent) handleStream(st *yamux.Stream) {
 		if errors.As(err, &oe) {
 			code = oe.Code
 		}
-		_ = protocol.WriteJSON(bc, protocol.Reply{Code: code, Error: err.Error()})
+		// GPT: клиенту — общий текст, детали (какой адрес и почему)
+		// остаются в локальном логе, чтобы не отдавать оракул.
+		a.log.Printf("сессия отклонена: %v", err)
+		_ = protocol.WriteJSON(bc, protocol.Reply{Code: code, Error: "запрос отклонён настройками узла"})
 		st.Close()
 		return
 	}
@@ -327,7 +392,8 @@ func (a *Agent) handleStream(st *yamux.Stream) {
 	dialer := net.Dialer{Timeout: 15 * time.Second}
 	target, err := dialer.DialContext(ctx, "tcp", addr)
 	if err != nil {
-		_ = protocol.WriteJSON(bc, protocol.Reply{Code: dialCode(err), Error: err.Error()})
+		a.log.Printf("не удалось подключиться к %q:%d: %v", req.Host, req.Port, err)
+		_ = protocol.WriteJSON(bc, protocol.Reply{Code: dialCode(err), Error: "не удалось подключиться к цели"})
 		st.Close()
 		return
 	}
@@ -343,7 +409,8 @@ func (a *Agent) handleStream(st *yamux.Stream) {
 	}
 	_ = st.SetReadDeadline(time.Time{})
 
-	sess := a.reg.Add(req.Client, req.Host, req.Port, bc)
+	sessCtx, sessCancel := context.WithCancel(context.Background())
+	sess := a.reg.Add(req.Client, req.Host, req.Port, bc, sessCancel)
 	defer a.reg.Remove(sess.ID)
 
 	metered := &meterConn{
@@ -356,10 +423,11 @@ func (a *Agent) handleStream(st *yamux.Stream) {
 			sess.AddOut(n)
 			a.addTraffic(n)
 		},
-		throttle: a.throttle,
+		ctx:     sessCtx,
+		limiter: a.limiter,
 	}
 
-	a.log.Printf("сессия #%d: %s:%d", sess.ID, req.Host, req.Port)
+	a.log.Printf("сессия #%d: %q:%d", sess.ID, req.Host, req.Port)
 	protocol.Join(metered, target)
 	a.log.Printf("сессия #%d закрыта: принято %s, отдано %s",
 		sess.ID, humanBytes(sess.In()), humanBytes(sess.Out()))
@@ -378,28 +446,33 @@ func dialCode(err error) int {
 
 // meterConn считает байты в момент передачи, чтобы скорость обновлялась вживую,
 // и попутно тормозит поток до заданного лимита.
+// GPT: ожидание лимитера привязано к контексту сессии, иначе после закрытия
+// потока горутина висела бы в WaitN до пополнения токенов.
 type meterConn struct {
 	net.Conn
-	onRead   func(int64)
-	onWrite  func(int64)
-	throttle func(int)
+	onRead  func(int64)
+	onWrite func(int64)
+	ctx     context.Context
+	limiter *rate.Limiter
+}
+
+func (m *meterConn) wait(n int) {
+	if m.limiter == nil || n <= 0 {
+		return
+	}
+	_ = m.limiter.WaitN(m.ctx, n)
 }
 
 func (m *meterConn) Read(p []byte) (int, error) {
 	n, err := m.Conn.Read(p)
 	if n > 0 {
 		m.onRead(int64(n))
-		if m.throttle != nil {
-			m.throttle(n)
-		}
 	}
 	return n, err
 }
 
 func (m *meterConn) Write(p []byte) (int, error) {
-	if len(p) > 0 && m.throttle != nil {
-		m.throttle(len(p))
-	}
+	m.wait(len(p))
 	n, err := m.Conn.Write(p)
 	if n > 0 {
 		m.onWrite(int64(n))
@@ -423,16 +496,35 @@ func (a *Agent) SetEnabled(v bool) { a.enabled.Store(v) }
 
 func (a *Agent) KillAll() { a.reg.KillAll() }
 
-// Keys отдаёт панели список ключей вместе со значениями:
-// владелец должен иметь возможность передать ключ повторно.
+// Keys отдаёт панели список ключей. Сами значения не отдаются:
+// их можно получить только отдельным запросом по конкретному ключу.
 func (a *Agent) Keys() []ui.KeyView {
 	a.keysMu.Lock()
 	defer a.keysMu.Unlock()
 	out := make([]ui.KeyView, 0, len(a.keys))
 	for _, k := range a.keys {
-		out = append(out, ui.KeyView{ID: k.ID, Label: k.Label, Value: k.Value})
+		out = append(out, ui.KeyView{ID: k.ID, Label: k.Label, Value: maskKey(k.Value)})
 	}
 	return out
+}
+
+// KeyValue возвращает полный ключ по запросу из панели.
+func (a *Agent) KeyValue(id string) (string, error) {
+	a.keysMu.Lock()
+	defer a.keysMu.Unlock()
+	for _, k := range a.keys {
+		if k.ID == id {
+			return k.Value, nil
+		}
+	}
+	return "", errors.New("ключ не найден")
+}
+
+func maskKey(v string) string {
+	if len(v) <= 12 {
+		return v
+	}
+	return v[:4] + "…" + v[len(v)-4:]
 }
 
 // AddKey создаёт ключ доступа и сразу сообщает его шлюзу.
@@ -456,10 +548,20 @@ func (a *Agent) AddKey(label string) (ui.KeyView, error) {
 		a.keysMu.Unlock()
 		return ui.KeyView{}, errors.New("слишком много ключей")
 	}
-	key := limits.AccessKey{ID: value[:10], Label: label, Value: value}
+	idBuf := make([]byte, 8)
+	if _, err := rand.Read(idBuf); err != nil {
+		a.keysMu.Unlock()
+		return ui.KeyView{}, err
+	}
+	key := limits.AccessKey{
+		ID:    base64.RawURLEncoding.EncodeToString(idBuf),
+		Label: label,
+		Value: value,
+	}
 	a.keys = append(a.keys, key)
 	a.keysMu.Unlock()
 
+	a.keysDirty.Store(true)
 	a.saveState()
 	a.notifyKeys()
 	a.log.Printf("добавлен ключ доступа: %s", label)
@@ -484,6 +586,7 @@ func (a *Agent) RemoveKey(id string) error {
 	if !found {
 		return errors.New("ключ не найден")
 	}
+	a.keysDirty.Store(true)
 	a.saveState()
 	a.notifyKeys()
 	a.log.Printf("ключ отозван: %s", id)
@@ -513,7 +616,11 @@ func (a *Agent) saveState() {
 }
 
 // notifyKeys отправляет шлюзу актуальный список хешей без разрыва туннеля.
+// Повторяется по таймеру, пока шлюз не подтвердит доставку.
 func (a *Agent) notifyKeys() {
+	if !a.keysDirty.Load() {
+		return
+	}
 	sess := a.session()
 	if sess == nil {
 		return
@@ -527,6 +634,7 @@ func (a *Agent) notifyKeys() {
 	if err := protocol.WriteJSON(st, protocol.Control{Type: protocol.ControlKeys, Keys: a.keyHashes()}); err != nil {
 		return
 	}
+	a.keysDirty.Store(false)
 }
 
 func (a *Agent) session() *yamux.Session {
@@ -587,13 +695,6 @@ func (a *Agent) SetLimits(v ui.LimitsView) error {
 	a.log.Printf("ограничения обновлены: квота %d МБ/сутки и %d МБ/месяц, скорость %d КБ/с, доменов: %d",
 		norm.QuotaMB, norm.QuotaMonthMB, norm.RateKBps, len(limits.DomainList(norm.Domains)))
 	return nil
-}
-
-func (a *Agent) throttle(n int) {
-	if n <= 0 {
-		return
-	}
-	_ = a.limiter.WaitN(context.Background(), n)
 }
 
 func (a *Agent) addTraffic(n int64) {
@@ -696,7 +797,12 @@ func (a *Agent) flushLimits() {
 	a.limDirty = false
 	a.limMu.Unlock()
 
-	if err := limits.Save(a.limPath, st); err != nil {
+	// GPT: несколько горутин писали в один tmp-файл и могли оставить битый JSON.
+	a.saveMu.Lock()
+	err := limits.Save(a.limPath, st)
+	a.saveMu.Unlock()
+
+	if err != nil {
 		a.log.Printf("не удалось сохранить настройки: %v", err)
 		a.limMu.Lock()
 		a.limDirty = true
