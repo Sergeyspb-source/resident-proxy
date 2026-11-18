@@ -289,23 +289,23 @@ func (r *Relay) removeLink(l *agentLink) {
 	}
 }
 
-// lookupKey находит узел по хешу ключа и возвращает подпись ключа.
-func (r *Relay) lookupKey(hash string) (*agentLink, string, bool) {
+// lookupKey находит узел по хешу ключа и возвращает ID и подпись ключа.
+func (r *Relay) lookupKey(hash string) (*agentLink, string, string, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	l, ok := r.byKey[hash]
 	if !ok {
-		return nil, "", false
+		return nil, "", "", false
 	}
 	if l.closed || l.sess.IsClosed() {
 		delete(r.byKey, hash)
-		return nil, "", false
+		return nil, "", "", false
 	}
 	for _, k := range l.keys {
 		if k.Hash == hash {
-			return l, k.Label, true
+			return l, k.ID, k.Label, true
 		}
 	}
-	return l, "", true
+	return l, "", "", true
 }

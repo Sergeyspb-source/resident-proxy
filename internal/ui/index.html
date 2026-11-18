@@ -19,154 +19,164 @@
   }
   * { box-sizing: border-box; }
   body {
-    margin: 0;
-    background: var(--bg);
-    color: var(--text);
+    margin: 0; background: var(--bg); color: var(--text);
     font: 14px/1.45 "Segoe UI", system-ui, -apple-system, sans-serif;
   }
-  .wrap { max-width: 980px; margin: 0 auto; padding: 22px 18px 40px; }
-  header { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-bottom: 18px; }
+  .wrap { max-width: 1060px; margin: 0 auto; padding: 20px 18px 40px; }
+
+  header { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
   .brand { font-size: 17px; font-weight: 600; letter-spacing: .2px; }
-  .who { color: var(--muted); font-size: 13px; }
+  .who { color: var(--muted); font-size: 12.5px; }
   .who b { color: var(--text); font-weight: 500; }
   .status {
     margin-left: auto; display: inline-flex; align-items: center; gap: 8px;
-    padding: 6px 12px; border: 1px solid var(--line); border-radius: 999px;
-    font-size: 12.5px; color: var(--muted); background: var(--panel);
+    padding: 5px 11px; border: 1px solid var(--line); border-radius: 999px;
+    font-size: 12px; color: var(--muted); background: var(--panel);
   }
   .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
-  .dot.on { background: var(--green); box-shadow: 0 0 0 3px rgba(67, 209, 122, .15); }
+  .dot.on { background: var(--green); box-shadow: 0 0 0 3px rgba(67,209,122,.15); }
   .dot.warn { background: var(--amber); }
   .dot.off { background: var(--red); }
 
-  .hero {
-    display: flex; align-items: center; gap: 18px; flex-wrap: wrap;
-    background: var(--panel); border: 1px solid var(--line); border-radius: 16px;
-    padding: 20px; margin-bottom: 14px;
+  .tabs { display: flex; gap: 4px; margin: 16px 0 14px; border-bottom: 1px solid var(--line); }
+  .tabs button {
+    background: transparent; border: 0; color: var(--muted); cursor: pointer;
+    padding: 9px 14px; font: 500 13px inherit; border-bottom: 2px solid transparent;
   }
+  .tabs button:hover { color: var(--text); }
+  .tabs button.active { color: var(--text); border-bottom-color: var(--blue); }
+
+  .tab { display: none; }
+  .tab.active { display: block; }
+
+  .card {
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 14px; padding: 15px; margin-bottom: 12px;
+  }
+  .label { color: var(--muted); font-size: 11.5px; text-transform: uppercase; letter-spacing: .5px; }
+  .row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  .row .label { margin: 0; }
+
+  .hero { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
   .toggle {
-    border: 0; border-radius: 12px; padding: 16px 26px; cursor: pointer;
-    font: 600 15px/1 "Segoe UI", system-ui, sans-serif; color: #06120b;
-    background: var(--green); min-width: 190px; transition: filter .15s, background .15s;
+    border: 0; border-radius: 11px; padding: 14px 24px; cursor: pointer;
+    font: 600 14px/1 "Segoe UI", system-ui, sans-serif; color: #06120b;
+    background: var(--green); min-width: 170px; transition: filter .15s, background .15s;
   }
   .toggle:hover { filter: brightness(1.08); }
   .toggle.off { background: var(--red); color: #1a0606; }
   .toggle:disabled { opacity: .55; cursor: default; }
-  .heroTitle { font-size: 18px; font-weight: 600; }
-  .heroSub { color: var(--muted); font-size: 13px; margin-top: 3px; max-width: 560px; }
+  .heroTitle { font-size: 17px; font-weight: 600; }
+  .heroSub { color: var(--muted); font-size: 12.5px; margin-top: 3px; max-width: 620px; }
 
-  .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin-bottom: 14px; }
-  .card {
-    background: var(--panel); border: 1px solid var(--line);
-    border-radius: 16px; padding: 16px;
-  }
-  .label { color: var(--muted); font-size: 12.5px; text-transform: uppercase; letter-spacing: .5px; }
-  .big { font: 600 26px/1.2 "Segoe UI", system-ui, sans-serif; margin-top: 8px; font-variant-numeric: tabular-nums; }
-  .sub { color: var(--muted); font-size: 12.5px; margin-top: 4px; font-variant-numeric: tabular-nums; }
-  .up { color: var(--blue); }
+  .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 12px; }
+  .stat .label { margin-bottom: 6px; display: block; }
+  .big { font: 600 24px/1.2 "Segoe UI", system-ui, sans-serif; font-variant-numeric: tabular-nums; }
+  .sub { color: var(--muted); font-size: 12px; margin-top: 3px; font-variant-numeric: tabular-nums; }
   .down { color: var(--green); }
+  .up { color: var(--blue); }
 
-  .chartCard { margin-bottom: 14px; }
-  .chart { display: flex; align-items: flex-end; gap: 2px; height: 92px; margin-top: 12px; }
+  .chart { display: flex; align-items: flex-end; gap: 2px; height: 84px; margin-top: 10px; }
   .bar { flex: 1; min-height: 2px; background: #2f3947; border-radius: 2px 2px 0 0; transition: height .18s linear; }
   .bar.hot { background: var(--blue); }
 
-  .row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
-  .row .label { margin: 0; }
   table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
   th {
-    text-align: left; font: 500 11.5px/1 "Segoe UI", system-ui, sans-serif;
-    color: var(--muted); text-transform: uppercase; letter-spacing: .5px;
-    padding: 8px 8px; border-bottom: 1px solid var(--line);
+    text-align: left; font: 500 11px/1 "Segoe UI", system-ui, sans-serif; color: var(--muted);
+    text-transform: uppercase; letter-spacing: .5px; padding: 7px 8px; border-bottom: 1px solid var(--line);
   }
-  td { padding: 9px 8px; border-bottom: 1px solid #1b2028; font-size: 13px; }
+  td { padding: 8px; border-bottom: 1px solid #1b2028; font-size: 12.5px; }
   tr:last-child td { border-bottom: 0; }
   td.num, th.num { text-align: right; }
-  .target { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .empty { color: var(--muted); font-size: 13px; padding: 16px 4px 4px; }
+  .target { max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .empty { color: var(--muted); font-size: 12.5px; padding: 12px 2px 2px; }
 
   .danger {
     border: 1px solid #49262b; background: #23151a; color: #ff9a9a;
-    border-radius: 9px; padding: 7px 12px; cursor: pointer; font: 500 12.5px inherit;
+    border-radius: 8px; padding: 6px 11px; cursor: pointer; font: 500 12px inherit;
   }
   .danger:hover { background: #2c181f; }
   .danger:disabled { opacity: .4; cursor: default; }
 
-  .res { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 14px; }
-  .meter { margin-top: 10px; }
-  .meterTop { display: flex; justify-content: space-between; font-size: 12.5px; color: var(--muted); }
-  .meterTop b { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
-  .track { height: 6px; background: #202631; border-radius: 4px; margin-top: 6px; overflow: hidden; }
-  .fill { height: 100%; width: 0%; background: var(--blue); border-radius: 4px; transition: width .3s; }
-  .fill.green { background: var(--green); }
-  .fill.amber { background: var(--amber); }
-
-  footer { color: var(--muted); font-size: 12px; margin-top: 22px; line-height: 1.6; }
-  footer b { color: var(--text); font-weight: 500; }
-  .note { color: var(--muted); font-size: 12px; margin-top: 8px; }
-
-  .fields { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 12px; }
-  .fields.three { grid-template-columns: repeat(3, 1fr); }
-  .field span { display: block; color: var(--muted); font-size: 12.5px; margin-bottom: 6px; }
-  .field input, .field textarea {
-    width: 100%; background: var(--panel2); color: var(--text);
-    border: 1px solid var(--line); border-radius: 9px; padding: 9px 11px;
-    font: 13px/1.4 "Segoe UI", system-ui, sans-serif; outline: none;
-  }
-  .field input:focus, .field textarea:focus { border-color: #3b5b80; }
-  .field textarea { resize: vertical; min-height: 74px; }
-  .field small { display: block; color: var(--muted); font-size: 11.5px; margin-top: 5px; }
-  .quota { margin-top: 16px; }
-  .limitsActions { display: flex; align-items: center; gap: 12px; margin-top: 14px; }
   .primary {
-    border: 0; background: var(--blue); color: #05121f;
-    border-radius: 9px; padding: 9px 18px; cursor: pointer;
-    font: 600 13px "Segoe UI", system-ui, sans-serif;
+    border: 0; background: var(--blue); color: #05121f; border-radius: 8px;
+    padding: 8px 15px; cursor: pointer; font: 600 12.5px "Segoe UI", system-ui, sans-serif;
   }
   .primary:disabled { opacity: .5; cursor: default; }
-  .saved { color: var(--green); font-size: 12px; }
-
-  .checks { margin-top: 14px; display: flex; flex-direction: column; gap: 8px; }
-  .check { display: flex; align-items: center; gap: 9px; color: var(--text); font-size: 13px; cursor: pointer; }
-  .check input { width: 16px; height: 16px; accent-color: var(--green); }
-
-  .keys { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; }
-  .keyItem {
-    display: flex; align-items: center; gap: 10px;
-    background: var(--panel2); border: 1px solid var(--line);
-    border-radius: 10px; padding: 9px 12px;
-  }
-  .keyLabel { font-weight: 500; min-width: 90px; }
-  .keyValue {
-    color: var(--muted); font-family: ui-monospace, Consolas, monospace; font-size: 12px;
-    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1;
-  }
   .ghost {
     border: 1px solid var(--line); background: transparent; color: var(--text);
-    border-radius: 8px; padding: 6px 10px; cursor: pointer; font: 500 12px inherit;
+    border-radius: 8px; padding: 5px 9px; cursor: pointer; font: 500 11.5px inherit;
   }
   .ghost:hover { background: #1f242c; }
-  .small { padding: 5px 9px; font-size: 11.5px; }
-  .textInput {
-    flex: 1; background: var(--panel2); color: var(--text);
-    border: 1px solid var(--line); border-radius: 9px; padding: 9px 11px;
+
+  input, textarea {
+    width: 100%; background: var(--panel2); color: var(--text);
+    border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px;
     font: 13px/1.4 "Segoe UI", system-ui, sans-serif; outline: none;
   }
-  .textInput:focus { border-color: #3b5b80; }
+  input:focus, textarea:focus { border-color: #3b5b80; }
+  textarea { resize: vertical; min-height: 64px; }
+
+  .field span { display: block; color: var(--muted); font-size: 12px; margin-bottom: 5px; }
+  .field small { display: block; color: var(--muted); font-size: 11px; margin-top: 4px; }
+
+  .addUser { display: flex; gap: 10px; align-items: center; margin-top: 10px; }
+  .addUser input { flex: 1; }
+
   .newKey { margin-top: 12px; padding: 12px; border: 1px solid #2c3a2f; background: #15201a; border-radius: 10px; }
-  .keyRow { display: flex; gap: 10px; align-items: center; margin-top: 8px; flex-wrap: wrap; }
+  .keyRow { display: flex; gap: 10px; align-items: center; margin-top: 7px; flex-wrap: wrap; }
   .keyRow code {
     font-family: ui-monospace, Consolas, monospace; font-size: 12.5px; word-break: break-all;
     background: #0f1512; padding: 7px 9px; border-radius: 7px; flex: 1;
   }
-  .newKey small { display: block; color: var(--muted); font-size: 11.5px; margin-top: 8px; }
-  .newKey code { font-family: ui-monospace, Consolas, monospace; }
+  .newKey small { display: block; color: var(--muted); font-size: 11px; margin-top: 7px; }
 
-  @media (max-width: 720px) {
-    .grid { grid-template-columns: 1fr; }
-    .res { grid-template-columns: 1fr; }
-    .fields { grid-template-columns: 1fr; }
-    .fields.three { grid-template-columns: 1fr; }
+  .user { border: 1px solid var(--line); background: var(--panel); border-radius: 12px; margin-bottom: 10px; overflow: hidden; }
+  .userHead {
+    display: grid; grid-template-columns: minmax(120px, 1fr) minmax(140px, 1.2fr) auto auto;
+    gap: 12px; align-items: center; padding: 11px 14px; cursor: pointer;
+  }
+  .userHead:hover { background: #171b21; }
+  .userName { font-weight: 600; font-size: 13.5px; display: flex; align-items: center; gap: 8px; }
+  .badge {
+    font: 600 10.5px/1 "Segoe UI", system-ui, sans-serif; color: #06120b;
+    background: var(--green); border-radius: 999px; padding: 3px 7px;
+  }
+  .badge.off { background: #2a303a; color: var(--muted); }
+  .userKey {
+    font-family: ui-monospace, Consolas, monospace; font-size: 11.5px; color: var(--muted);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .userSpend { font-size: 11.5px; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .userBody { padding: 0 14px 14px; border-top: 1px solid #1b2028; }
+  .userBody[hidden] { display: none; }
+
+  .usage { margin: 12px 0 14px; }
+  .meterTop { display: flex; justify-content: space-between; font-size: 11.5px; color: var(--muted); margin-top: 6px; }
+  .meterTop b { color: var(--text); font-weight: 500; font-variant-numeric: tabular-nums; }
+  .track { height: 5px; background: #202631; border-radius: 4px; margin-top: 5px; overflow: hidden; }
+  .fill { height: 100%; width: 0%; background: var(--green); border-radius: 4px; transition: width .3s; }
+  .fill.amber { background: var(--amber); }
+
+  .fields3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 12px; }
+  .userActions { display: flex; gap: 10px; align-items: center; margin-top: 12px; }
+  .saved { color: var(--green); font-size: 11.5px; }
+
+  .checks { margin-top: 6px; }
+  .check { display: flex; align-items: center; gap: 9px; font-size: 13px; cursor: pointer; }
+  .check input { width: 16px; height: 16px; accent-color: var(--green); }
+
+  .res { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .res .card { margin: 0; }
+  .note { color: var(--muted); font-size: 11.5px; margin-top: 8px; }
+
+  footer { color: var(--muted); font-size: 11.5px; margin-top: 18px; line-height: 1.6; }
+  footer b { color: var(--text); font-weight: 500; }
+
+  @media (max-width: 760px) {
+    .stats, .res, .fields3 { grid-template-columns: 1fr; }
+    .userHead { grid-template-columns: 1fr auto; }
+    .userKey, .userSpend { display: none; }
     .status { margin-left: 0; }
     .toggle { width: 100%; }
     .hide-sm { display: none; }
@@ -183,158 +193,130 @@
     <div class="status"><span id="statusDot" class="dot"></span><span id="statusText">проверка…</span></div>
   </header>
 
-  <section class="hero">
-    <button id="toggle" class="toggle">Включить</button>
-    <div>
-      <div id="heroTitle" class="heroTitle">Загрузка…</div>
-      <div id="heroSub" class="heroSub">—</div>
-    </div>
-  </section>
+  <nav class="tabs">
+    <button data-tab="overview" class="active">Обзор</button>
+    <button data-tab="users">Пользователи</button>
+    <button data-tab="settings">Настройки</button>
+  </nav>
 
-  <section class="grid">
+  <section id="tab-overview" class="tab active">
     <div class="card">
-      <div class="label">Принято от шлюза</div>
-      <div id="inRate" class="big down">0 Б/с</div>
-      <div id="inTotal" class="sub">всего 0 Б</div>
+      <div class="hero">
+        <button id="toggle" class="toggle">Включить</button>
+        <div>
+          <div id="heroTitle" class="heroTitle">Загрузка…</div>
+          <div id="heroSub" class="heroSub">—</div>
+        </div>
+      </div>
     </div>
+
+    <div class="stats">
+      <div class="card stat">
+        <span class="label">Принято</span>
+        <div id="inRate" class="big down">0 Б/с</div>
+        <div id="inTotal" class="sub">всего 0 Б</div>
+      </div>
+      <div class="card stat">
+        <span class="label">Отдано</span>
+        <div id="outRate" class="big up">0 Б/с</div>
+        <div id="outTotal" class="sub">всего 0 Б</div>
+      </div>
+      <div class="card stat">
+        <span class="label">Активных подключений</span>
+        <div id="sessCount" class="big">0</div>
+        <div id="sessLimit" class="sub">лимит 0</div>
+      </div>
+    </div>
+
     <div class="card">
-      <div class="label">Отдано шлюзу</div>
-      <div id="outRate" class="big up">0 Б/с</div>
-      <div id="outTotal" class="sub">всего 0 Б</div>
+      <div class="label">Суммарная скорость, последние 60 секунд</div>
+      <div id="chart" class="chart"></div>
     </div>
+
     <div class="card">
-      <div class="label">Активных подключений</div>
-      <div id="sessCount" class="big">0</div>
-      <div id="sessLimit" class="sub">лимит 0</div>
+      <div class="row">
+        <div class="label">Кто подключён</div>
+        <button id="kill" class="danger">Остановить все</button>
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th class="hide-sm">#</th>
+            <th>Кто</th>
+            <th>Куда</th>
+            <th class="num hide-sm">Время</th>
+            <th class="num">Принято</th>
+            <th class="num">Отдано</th>
+          </tr>
+        </thead>
+        <tbody id="rows"></tbody>
+      </table>
+      <div id="empty" class="empty">Подключений нет. Программа ничего не передаёт.</div>
     </div>
   </section>
 
-  <section class="card chartCard">
-    <div class="label">Суммарная скорость, последние 60 секунд</div>
-    <div id="chart" class="chart"></div>
-  </section>
-
-  <section class="card">
-    <div class="row">
-      <div class="label">Активные подключения</div>
-      <button id="kill" class="danger">Остановить все</button>
-    </div>
-    <table>
-      <thead>
-        <tr>
-          <th>#</th>
-          <th>Куда</th>
-          <th class="hide-sm">Клиент</th>
-          <th class="num">Время</th>
-          <th class="num">Принято</th>
-          <th class="num">Отдано</th>
-        </tr>
-      </thead>
-      <tbody id="rows"></tbody>
-    </table>
-    <div id="empty" class="empty">Подключений нет. Программа ничего не передаёт.</div>
-  </section>
-
-  <section class="card">
-    <div class="row" style="margin-bottom:0">
-      <div class="label">Ограничения узла</div>
-      <span id="limitsSaved" class="saved"></span>
-    </div>
-    <div class="fields three">
-      <label class="field">
-        <span>Квота в сутки, МБ</span>
-        <input id="quota" type="number" min="0" step="100" inputmode="numeric">
-        <small>0 — без ограничения</small>
-      </label>
-      <label class="field">
-        <span>Квота в месяц, МБ</span>
-        <input id="quotaMonth" type="number" min="0" step="1000" inputmode="numeric">
-        <small>0 — без ограничения</small>
-      </label>
-      <label class="field">
-        <span>Скорость, КБ/с</span>
-        <input id="rate" type="number" min="0" step="100" inputmode="numeric">
-        <small>0 — без ограничения, общая на все подключения</small>
-      </label>
-    </div>
-    <label class="field" style="margin-top:14px">
-      <span>Разрешённые домены</span>
-      <textarea id="domains" rows="3" placeholder="example.com, *.company.com"></textarea>
-      <small>Пусто — любые домены. Указанный домен разрешает и все его поддомены.</small>
-    </label>
-    <div class="quota">
-      <div class="meterTop"><span>Израсходовано сегодня</span><b id="quotaText">0 Б</b></div>
-      <div class="track"><div id="quotaBar" class="fill green"></div></div>
-    </div>
-    <div class="quota">
-      <div class="meterTop"><span>Израсходовано за месяц</span><b id="quotaMonthText">0 Б</b></div>
-      <div class="track"><div id="quotaMonthBar" class="fill green"></div></div>
-    </div>
-    <div class="checks">
-      <label class="check">
-        <input type="checkbox" id="autostart">
-        <span>Запускать при входе в Windows и держать в трее</span>
-      </label>
-    </div>
-    <div class="limitsActions">
-      <button id="saveLimits" class="primary">Сохранить</button>
-      <span class="note" style="margin:0">Действует сразу, без перезапуска</span>
-    </div>
-  </section>
-
-  <section class="card">
-    <div class="row" style="margin-bottom:0">
-      <div class="label">Доступ для коллег</div>
-      <span id="keysSaved" class="saved"></span>
-    </div>
-    <div id="keysList" class="keys"></div>
-    <div id="keysEmpty" class="empty">Ключей нет. Пока вы не создадите ключ, подключиться к вашему узлу никто не сможет.</div>
-    <div class="limitsActions">
-      <input id="keyLabel" class="textInput" maxlength="40" placeholder="Подпись, например «Иван»">
-      <button id="addKey" class="primary">Создать ключ</button>
-    </div>
-    <div id="newKeyBox" class="newKey" style="display:none">
-      <div class="label">Ключ для коллеги</div>
-      <div class="keyRow"><code id="newKeyValue"></code><button id="copyKey" class="ghost">Копировать</button></div>
-      <small>Передайте ключ лично. Коллега запустит: <code>proxy.exe client -server АДРЕС -key КЛЮЧ</code></small>
-    </div>
-  </section>
-
-  <section class="res">
+  <section id="tab-users" class="tab">
     <div class="card">
-      <div class="label">Наш процесс</div>
-      <div class="meter">
+      <div class="row">
+        <div class="label">Пользователи</div>
+        <span id="usersHint" class="note" style="margin:0">ключей нет</span>
+      </div>
+      <div class="addUser">
+        <input id="keyLabel" maxlength="40" placeholder="Подпись, например «Иван»">
+        <button id="addKey" class="primary">Создать ключ</button>
+      </div>
+      <div id="newKeyBox" class="newKey" hidden>
+        <div class="label">Ключ для коллеги</div>
+        <div class="keyRow"><code id="newKeyValue"></code><button id="copyKey" class="ghost">Копировать</button></div>
+        <small>Передайте ключ лично. Коллега запустит: <code>exitnode-client.exe client -server АДРЕС -key КЛЮЧ -tls</code></small>
+      </div>
+    </div>
+
+    <div id="userList"></div>
+    <div id="usersEmpty" class="empty">Пока никого. Создайте ключ, чтобы коллега мог подключиться.</div>
+  </section>
+
+  <section id="tab-settings" class="tab">
+    <div class="card">
+      <div class="label">Запуск</div>
+      <div class="checks">
+        <label class="check">
+          <input type="checkbox" id="autostart">
+          <span>Запускать при входе в Windows и держать в трее</span>
+        </label>
+      </div>
+      <div class="note">Программа не требует прав администратора. Полный выход — через меню иконки в трее.</div>
+    </div>
+
+    <div class="res">
+      <div class="card">
+        <div class="label">Наш процесс</div>
         <div class="meterTop"><span>Процессор</span><b id="cpuProc">0%</b></div>
         <div class="track"><div id="cpuProcBar" class="fill"></div></div>
-      </div>
-      <div class="meter">
         <div class="meterTop"><span>Память</span><b id="rssMB">0 МБ</b></div>
-        <div class="track"><div id="rssBar" class="fill green"></div></div>
-      </div>
-      <div class="meter">
+        <div class="track"><div id="rssBar" class="fill"></div></div>
         <div class="meterTop"><span>Время работы</span><b id="uptime">0 мин</b></div>
       </div>
-    </div>
-    <div class="card">
-      <div class="label">Компьютер целиком</div>
-      <div class="meter">
+      <div class="card">
+        <div class="label">Компьютер целиком</div>
         <div class="meterTop"><span>Процессор</span><b id="cpuSys">0%</b></div>
-        <div class="track"><div id="cpuSysBar" class="fill amber"></div></div>
-      </div>
-      <div class="meter">
+        <div class="track"><div id="cpuSysBar" class="fill"></div></div>
         <div class="meterTop"><span>Память</span><b id="memSys">0%</b></div>
-        <div class="track"><div id="memSysBar" class="fill green"></div></div>
+        <div class="track"><div id="memSysBar" class="fill"></div></div>
+        <div class="note">Разница между блоками показывает, сколько ресурсов забирает именно эта программа.</div>
       </div>
-      <div class="note">Разница между двумя блоками показывает, сколько ресурсов забирает именно эта программа.</div>
+    </div>
+
+    <div class="card" style="margin-top:12px">
+      <div class="label">Узел</div>
+      <div class="note" id="nodeInfo">—</div>
     </div>
   </section>
 
   <footer>
-    <b>Вы всё видите.</b> Панель открыта только на этом компьютере. Программа не требует прав администратора
-    и не прописывается в автозапуск без вашего согласия. Пока иконка есть в трее — узел работает;
-    закрытие окна ничего не останавливает, полный выход — через меню иконки в трее.
-    Пока узел включён, сайты видят IP этого компьютера, а не IP клиента — поэтому каждое подключение
-    отображается в таблице.
+    <b>Вы всё видите.</b> Панель открыта только на этом компьютере. Пока иконка есть в трее — узел работает;
+    закрытие окна ничего не останавливает, полный выход — через меню иконки.
+    Каждый пользователь получает свой ключ, свои сайты, квоту и скорость.
   </footer>
 </div>
 
@@ -342,30 +324,29 @@
 const $ = (id) => document.getElementById(id);
 
 const T = {
-  on: "Включено",
-  off: "Выключено",
   titleOn: "Узел работает",
   titleOff: "Узел выключен",
-  subOn: "Трафик может идти через ваш IP. Ниже видно каждое подключение и скорость.",
+  subOn: "Трафик идёт через ваш IP. Ниже видно каждое подключение и скорость.",
   subOff: "Программа ничего не пропускает через ваш компьютер.",
   btnOn: "Выключить",
   btnOff: "Включить",
   connected: "Подключено к шлюзу",
   connecting: "Нет связи со шлюзом",
   offline: "Панель не отвечает",
-  limit: (n) => "лимит " + n,
-  session: (id) => "#" + id,
   empty: "Подключений нет. Программа ничего не передаёт.",
   total: (v) => "всего " + v,
+  limit: (n) => "лимит " + n,
   uptimeMin: (m) => m + " мин",
   uptimeHour: (h, m) => h + " ч " + m + " мин",
-  quotaStatus: "Квота исчерпана",
-  quotaSub: "Суточная квота трафика израсходована. Новые подключения отклоняются до полуночи.",
-  quotaUsed: (u, t) => (t > 0 ? u + " из " + t : u + " (без лимита)"),
   saved: "Сохранено",
   copied: "Скопировано",
   autostartOn: "Автозапуск включён",
   autostartOff: "Автозапуск выключен",
+  noLimit: "без лимита",
+  of: " из ",
+  users: (n) => n + " " + (n === 1 ? "пользователь" : (n < 5 ? "пользователя" : "пользователей")),
+  online: (n) => "онлайн " + n,
+  never: "ещё не подключался",
 };
 
 function fmtBytes(n) {
@@ -385,14 +366,29 @@ function fmtDur(sec) {
   return Math.floor(m / 60) + " ч " + (m % 60) + " мин";
 }
 function pct(v) { return Math.max(0, Math.min(100, Number(v) || 0)); }
+function el(tag, cls, text) {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (text !== undefined) e.textContent = text;
+  return e;
+}
 
+/* ---------- вкладки ---------- */
+function setTab(name) {
+  document.querySelectorAll(".tabs button").forEach(b => b.classList.toggle("active", b.dataset.tab === name));
+  document.querySelectorAll(".tab").forEach(s => s.classList.toggle("active", s.id === "tab-" + name));
+}
+document.querySelectorAll(".tabs button").forEach(b => {
+  b.addEventListener("click", () => setTab(b.dataset.tab));
+});
+
+/* ---------- график ---------- */
 const bars = [];
 (function initChart() {
-  const el = $("chart");
+  const box = $("chart");
   for (let i = 0; i < 60; i++) {
-    const b = document.createElement("div");
-    b.className = "bar";
-    el.appendChild(b);
+    const b = el("div", "bar");
+    box.appendChild(b);
     bars.push(b);
   }
 })();
@@ -409,44 +405,185 @@ function renderChart(history) {
   }
 }
 
+/* ---------- подключения ---------- */
 function renderRows(sessions) {
   const body = $("rows");
   body.replaceChildren();
   $("empty").style.display = sessions.length ? "none" : "block";
   for (const s of sessions) {
-    const tr = document.createElement("tr");
-
-    const id = document.createElement("td");
-    id.textContent = T.session(s.id);
-
-    const target = document.createElement("td");
-    target.className = "target";
-    target.textContent = s.host + ":" + s.port;
+    const tr = el("tr");
+    const id = el("td", "hide-sm", "#" + s.id);
+    const who = el("td", "", s.client || "—");
+    const target = el("td", "target", s.host + ":" + s.port);
     target.title = s.host + ":" + s.port;
-
-    const client = document.createElement("td");
-    client.className = "hide-sm";
-    client.textContent = s.client || "—";
-
-    const age = document.createElement("td");
-    age.className = "num";
-    age.textContent = fmtDur(s.age);
-
-    const down = document.createElement("td");
-    down.className = "num down";
-    down.textContent = fmtBytes(s.in);
-
-    const up = document.createElement("td");
-    up.className = "num up";
-    up.textContent = fmtBytes(s.out);
-
-    tr.append(id, target, client, age, down, up);
+    const age = el("td", "num hide-sm", fmtDur(s.age));
+    const out = el("td", "num down", fmtBytes(s.out));
+    const inn = el("td", "num up", fmtBytes(s.in));
+    tr.append(id, who, target, age, inn, out);
     body.appendChild(tr);
   }
 }
 
-let busy = false;
+/* ---------- пользователи ---------- */
+const userCards = new Map();
+const expanded = new Set();
+let lastUsersSig = "";
 
+function userSpendText(k) {
+  const day = k.quota_bytes > 0 ? fmtBytes(k.used_bytes) + T.of + fmtBytes(k.quota_bytes) : fmtBytes(k.used_bytes) + " " + T.noLimit;
+  const month = k.quota_month_bytes > 0 ? fmtBytes(k.used_month_bytes) + T.of + fmtBytes(k.quota_month_bytes) : fmtBytes(k.used_month_bytes) + " " + T.noLimit;
+  return { day, month };
+}
+
+function updateUsage(c, k) {
+  const d = userSpendText(k);
+  c.dayText.textContent = d.day;
+  c.monthText.textContent = d.month;
+  const dp = k.quota_bytes > 0 ? Math.min(100, k.used_bytes / k.quota_bytes * 100) : 0;
+  const mp = k.quota_month_bytes > 0 ? Math.min(100, k.used_month_bytes / k.quota_month_bytes * 100) : 0;
+  c.dayBar.style.width = dp + "%";
+  c.monthBar.style.width = mp + "%";
+  c.dayBar.className = "fill " + (dp > 90 ? "amber" : "");
+  c.monthBar.className = "fill " + (mp > 90 ? "amber" : "");
+  c.online.textContent = k.online ? T.online(k.online) : "";
+  c.online.className = "badge" + (k.online ? "" : " off");
+  c.online.hidden = !k.online;
+}
+
+function buildUser(k) {
+  const root = el("div", "user");
+  root.id = "user-" + k.id;
+
+  const head = el("div", "userHead");
+  const name = el("div", "userName");
+  name.appendChild(el("span", "", k.label || "без подписи"));
+  const online = el("span", "badge off", "");
+  online.hidden = true;
+  name.appendChild(online);
+
+  const key = el("code", "userKey", k.value);
+  key.title = "Нажмите «Копировать», чтобы получить ключ";
+
+  const spend = el("div", "userSpend", "");
+
+  const controls = el("div", "userActions");
+  const copy = el("button", "ghost", "Копировать");
+  copy.addEventListener("click", async (e) => {
+    e.stopPropagation();
+    const res = await post("/api/keys/reveal", { id: k.id });
+    if (res && res.value) copyText(res.value, copy);
+  });
+  const chev = el("button", "ghost", "Настроить");
+  chev.addEventListener("click", (e) => {
+    e.stopPropagation();
+    body.hidden = !body.hidden;
+    chev.textContent = body.hidden ? "Настроить" : "Свернуть";
+    if (!body.hidden) expanded.add(k.id); else expanded.delete(k.id);
+  });
+  controls.append(copy, chev);
+
+  head.append(name, key, spend, controls);
+  head.addEventListener("click", () => chev.click());
+
+  const body = el("div", "userBody");
+  body.hidden = !expanded.has(k.id);
+  chev.textContent = body.hidden ? "Настроить" : "Свернуть";
+
+  const usage = el("div", "usage");
+  const dayTop = el("div", "meterTop");
+  dayTop.append(el("span", "", "Сегодня"), el("b", "", ""));
+  const dayBarWrap = el("div", "track");
+  const dayBar = el("div", "fill");
+  dayBarWrap.appendChild(dayBar);
+  const monthTop = el("div", "meterTop");
+  monthTop.append(el("span", "", "За месяц"), el("b", "", ""));
+  const monthBarWrap = el("div", "track");
+  const monthBar = el("div", "fill");
+  monthBarWrap.appendChild(monthBar);
+  usage.append(dayTop, dayBarWrap, monthTop, monthBarWrap);
+
+  const domField = el("label", "field");
+  domField.appendChild(el("span", "", "Разрешённые сайты"));
+  const dom = el("textarea", "");
+  dom.rows = 2;
+  dom.placeholder = "example.com, *.company.com";
+  dom.value = k.domains || "";
+  domField.append(dom, el("small", "", "Пусто — любые сайты. Домен разрешает и все поддомены."));
+
+  const fields = el("div", "fields3");
+  function numField(title, hint, value) {
+    const f = el("label", "field");
+    f.appendChild(el("span", "", title));
+    const i = el("input", "");
+    i.type = "number";
+    i.min = "0";
+    i.step = "100";
+    i.value = value || 0;
+    f.append(i, el("small", "", hint));
+    fields.appendChild(f);
+    return i;
+  }
+  const quota = numField("Квота в сутки, МБ", "0 — без ограничения", k.quota_mb);
+  const quotaMonth = numField("Квота в месяц, МБ", "0 — без ограничения", k.quota_month_mb);
+  const rate = numField("Скорость, КБ/с", "0 — без ограничения", k.rate_kbps);
+
+  const actions = el("div", "userActions");
+  const save = el("button", "primary", "Сохранить");
+  const saved = el("span", "saved", "");
+  const revoke = el("button", "danger", "Отозвать");
+  save.addEventListener("click", async () => {
+    save.disabled = true;
+    const res = await post("/api/keys/limits", {
+      id: k.id,
+      quota_mb: Math.max(0, parseInt(quota.value, 10) || 0),
+      quota_month_mb: Math.max(0, parseInt(quotaMonth.value, 10) || 0),
+      rate_kbps: Math.max(0, parseInt(rate.value, 10) || 0),
+      domains: dom.value,
+    });
+    save.disabled = false;
+    if (!res) return;
+    saved.textContent = T.saved;
+    setTimeout(() => { saved.textContent = ""; }, 2000);
+    poll();
+  });
+  revoke.addEventListener("click", async () => {
+    if (!confirm("Отозвать ключ «" + (k.label || "без подписи") + "»?")) return;
+    await post("/api/keys/remove", { id: k.id });
+    lastUsersSig = "";
+    poll();
+  });
+  actions.append(save, revoke, saved);
+
+  body.append(usage, domField, fields, actions);
+  root.append(head, body);
+
+  return {
+    root, body, online, spend,
+    dayText: dayTop.querySelector("b"),
+    monthText: monthTop.querySelector("b"),
+    dayBar, monthBar,
+  };
+}
+
+function renderUsers(keys) {
+  const sig = keys.map(k => k.id + "|" + k.label).join(",");
+  if (sig === lastUsersSig) return;
+  lastUsersSig = sig;
+
+  const list = $("userList");
+  list.replaceChildren();
+  userCards.clear();
+  $("usersEmpty").style.display = keys.length ? "none" : "block";
+  $("usersHint").textContent = keys.length ? T.users(keys.length) : "ключей нет";
+
+  for (const k of keys) {
+    const c = buildUser(k);
+    list.appendChild(c.root);
+    userCards.set(k.id, c);
+  }
+}
+
+/* ---------- API ---------- */
 async function post(path, body) {
   try {
     const res = await fetch(path, {
@@ -466,26 +603,22 @@ async function post(path, body) {
   }
 }
 
-$("toggle").addEventListener("click", async () => {
-  if (busy) return;
-  busy = true;
-  $("toggle").disabled = true;
+async function copyText(text, btn) {
   try {
-    const enabled = $("toggle").dataset.enabled === "1";
-    await post("/api/toggle", { enabled: !enabled });
-  } finally {
-    setTimeout(() => { busy = false; $("toggle").disabled = false; }, 400);
+    await navigator.clipboard.writeText(text);
+    const old = btn.textContent;
+    btn.textContent = T.copied;
+    setTimeout(() => { btn.textContent = old; }, 1500);
+  } catch (e) {
+    window.prompt("Скопируйте ключ:", text);
   }
-});
+}
 
-$("kill").addEventListener("click", async () => {
-  $("kill").disabled = true;
-  try { await post("/api/kill"); } finally { setTimeout(() => { $("kill").disabled = false; }, 400); }
-});
+/* ---------- настройки ---------- */
+function renderLimitsOnly() { /* вкладка «Настройки» без лимитов */ }
 
 function setStatus(kind, text) {
-  const dot = $("statusDot");
-  dot.className = "dot " + kind;
+  $("statusDot").className = "dot " + kind;
   $("statusText").textContent = text;
 }
 
@@ -501,19 +634,18 @@ async function poll() {
 
   $("nodeName").textContent = s.name || "—";
   $("relayAddr").textContent = s.relay || "—";
+  $("nodeInfo").textContent = "узел " + (s.name || "—") + ", шлюз " + (s.relay || "—") + ", лимит подключений " + s.max_sessions;
 
-  if (s.quota_exceeded) setStatus("warn", T.quotaStatus);
-  else if (!s.connected) setStatus("warn", T.connecting);
+  if (!s.connected) setStatus("warn", T.connecting);
   else if (s.enabled) setStatus("on", T.connected);
-  else setStatus("off", T.off);
+  else setStatus("off", T.btnOff);
 
   const btn = $("toggle");
   btn.dataset.enabled = s.enabled ? "1" : "0";
   btn.textContent = s.enabled ? T.btnOn : T.btnOff;
   btn.classList.toggle("off", !s.enabled);
-
   $("heroTitle").textContent = s.enabled ? T.titleOn : T.titleOff;
-  $("heroSub").textContent = s.quota_exceeded ? T.quotaSub : (s.enabled ? T.subOn : T.subOff);
+  $("heroSub").textContent = s.enabled ? T.subOn : T.subOff;
 
   $("inRate").textContent = fmtRate(s.in_rate);
   $("outRate").textContent = fmtRate(s.out_rate);
@@ -521,13 +653,12 @@ async function poll() {
   $("outTotal").textContent = T.total(fmtBytes(s.total_out));
   $("sessCount").textContent = s.sessions.length;
   $("sessLimit").textContent = T.limit(s.max_sessions);
-  $("empty").textContent = s.enabled ? T.empty : T.subOff;
+  $("empty").textContent = T.empty;
 
   $("cpuProc").textContent = pct(s.cpu_proc).toFixed(1) + "%";
   $("rssMB").textContent = Number(s.rss_mb || 0).toFixed(1) + " МБ";
   $("cpuSys").textContent = pct(s.cpu_sys).toFixed(1) + "%";
   $("memSys").textContent = pct(s.mem_sys).toFixed(1) + "%";
-
   $("cpuProcBar").style.width = pct(s.cpu_proc) + "%";
   $("rssBar").style.width = Math.min(100, (Number(s.rss_mb) || 0) / 5) + "%";
   $("cpuSysBar").style.width = pct(s.cpu_sys) + "%";
@@ -536,103 +667,46 @@ async function poll() {
   const m = Math.floor((s.uptime || 0) / 60);
   $("uptime").textContent = m < 60 ? T.uptimeMin(m) : T.uptimeHour(Math.floor(m / 60), m % 60);
 
+  if (document.activeElement !== $("autostart")) {
+    $("autostart").checked = !!s.autostart;
+  }
+
   renderChart(s.history || []);
   renderRows(s.sessions || []);
-  renderLimits(s.limits, s.quota_exceeded, s.autostart);
-  renderKeys(s.keys || []);
+  renderUsers(s.keys || []);
+  for (const k of s.keys || []) {
+    const c = userCards.get(k.id);
+    if (c) updateUsage(c, k);
+  }
   $("kill").disabled = !s.sessions.length;
 }
 
-let limitsInit = false;
-
-function setBar(id, used, total, exceeded) {
-  const share = total > 0 ? (used / total) * 100 : 0;
-  const el = $(id);
-  el.style.width = Math.min(100, share) + "%";
-  el.className = "fill " + (exceeded || share > 90 ? "amber" : "green");
-}
-
-function renderLimits(l, exceeded, autostart) {
-  if (!l) return;
-  if (!limitsInit) {
-    $("quota").value = l.quota_mb || 0;
-    $("quotaMonth").value = l.quota_month_mb || 0;
-    $("rate").value = l.rate_kbps || 0;
-    $("domains").value = l.domains || "";
-    limitsInit = true;
-  }
-  $("quotaText").textContent = T.quotaUsed(fmtBytes(l.used_bytes || 0), l.quota_bytes || 0);
-  $("quotaMonthText").textContent = T.quotaUsed(fmtBytes(l.used_month_bytes || 0), l.quota_month_bytes || 0);
-  setBar("quotaBar", Number(l.used_bytes) || 0, Number(l.quota_bytes) || 0, exceeded);
-  setBar("quotaMonthBar", Number(l.used_month_bytes) || 0, Number(l.quota_month_bytes) || 0, exceeded);
-
-  if (document.activeElement !== $("autostart")) {
-    $("autostart").checked = !!autostart;
-  }
-}
-
-function renderKeys(keys) {
-  const box = $("keysList");
-  box.replaceChildren();
-  $("keysEmpty").style.display = keys.length ? "none" : "block";
-
-  for (const k of keys) {
-    const row = document.createElement("div");
-    row.className = "keyItem";
-
-    const label = document.createElement("div");
-    label.className = "keyLabel";
-    label.textContent = k.label || "без подписи";
-
-    const value = document.createElement("code");
-    value.className = "keyValue";
-    value.textContent = k.value;
-    value.title = k.value;
-
-    const copy = document.createElement("button");
-    copy.className = "ghost small";
-    copy.textContent = "Копировать";
-    copy.addEventListener("click", async () => {
-      const res = await post("/api/keys/reveal", { id: k.id });
-      if (res && res.value) copyText(res.value, copy);
-    });
-
-    const revoke = document.createElement("button");
-    revoke.className = "danger small";
-    revoke.textContent = "Отозвать";
-    revoke.addEventListener("click", async () => {
-      if (!confirm("Отозвать ключ «" + (k.label || "без подписи") + "»?")) return;
-      await post("/api/keys/remove", { id: k.id });
-      poll();
-    });
-
-    row.append(label, value, copy, revoke);
-    box.appendChild(row);
-  }
-}
-
-async function copyText(text, btn) {
+/* ---------- действия ---------- */
+$("toggle").addEventListener("click", async () => {
+  const btn = $("toggle");
+  btn.disabled = true;
   try {
-    await navigator.clipboard.writeText(text);
-    const old = btn.textContent;
-    btn.textContent = T.copied;
-    setTimeout(() => { btn.textContent = old; }, 1500);
-  } catch (e) {
-    window.prompt("Скопируйте ключ:", text);
+    const enabled = btn.dataset.enabled === "1";
+    await post("/api/toggle", { enabled: !enabled });
+  } finally {
+    setTimeout(() => { btn.disabled = false; }, 400);
   }
-}
+});
+
+$("kill").addEventListener("click", async () => {
+  $("kill").disabled = true;
+  try { await post("/api/kill"); } finally { setTimeout(() => { $("kill").disabled = false; }, 400); }
+});
 
 $("addKey").addEventListener("click", async () => {
   const label = $("keyLabel").value.trim();
-  if (!label) {
-    $("keyLabel").focus();
-    return;
-  }
+  if (!label) { $("keyLabel").focus(); return; }
   const res = await post("/api/keys/add", { label });
   if (!res || !res.key) return;
   $("newKeyValue").textContent = res.key.value;
-  $("newKeyBox").style.display = "block";
+  $("newKeyBox").hidden = false;
   $("keyLabel").value = "";
+  lastUsersSig = "";
   poll();
 });
 
@@ -643,29 +717,9 @@ $("copyKey").addEventListener("click", () => {
 $("autostart").addEventListener("change", async () => {
   const on = $("autostart").checked;
   const res = await post("/api/autostart", { enabled: on });
-  if (!res) {
-    $("autostart").checked = !on;
-    return;
-  }
-  $("limitsSaved").textContent = on ? T.autostartOn : T.autostartOff;
-  setTimeout(() => { $("limitsSaved").textContent = ""; }, 2500);
-});
-
-$("saveLimits").addEventListener("click", async () => {
-  const btn = $("saveLimits");
-  btn.disabled = true;
-  try {
-    await post("/api/limits", {
-      quota_mb: Math.max(0, parseInt($("quota").value, 10) || 0),
-      quota_month_mb: Math.max(0, parseInt($("quotaMonth").value, 10) || 0),
-      rate_kbps: Math.max(0, parseInt($("rate").value, 10) || 0),
-      domains: $("domains").value,
-    });
-    $("limitsSaved").textContent = T.saved;
-    setTimeout(() => { $("limitsSaved").textContent = ""; }, 2500);
-  } finally {
-    btn.disabled = false;
-  }
+  if (!res) { $("autostart").checked = !on; return; }
+  setStatus($("statusDot").classList.contains("on") ? "on" : "warn", on ? T.autostartOn : T.autostartOff);
+  setTimeout(() => poll(), 1200);
 });
 
 poll();

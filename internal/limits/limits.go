@@ -1,5 +1,5 @@
-// Пакет limits хранит ограничения узла, ключи доступа и израсходованный трафик.
-// Настройки переживают перезапуск: файл лежит рядом с исполняемым файлом.
+// Пакет limits хранит состояние узла: ключи доступа с их лимитами и расходом.
+// Настройки переживают перезапуск: файл лежит в приватном каталоге пользователя.
 package limits
 
 import (
@@ -8,6 +8,7 @@ import (
 	"strings"
 )
 
+// Values — ограничения одного пользователя (ключа).
 type Values struct {
 	QuotaMB      int64  `json:"quota_mb"`
 	QuotaMonthMB int64  `json:"quota_month_mb"`
@@ -18,18 +19,23 @@ type Values struct {
 // AccessKey — ключ, который владелец узла выдаёт коллеге.
 // Хранится целиком, чтобы владелец мог показать его повторно.
 type AccessKey struct {
-	ID    string `json:"id"`
-	Label string `json:"label"`
-	Value string `json:"value"`
+	ID     string `json:"id"`
+	Label  string `json:"label"`
+	Value  string `json:"value"`
+	Limits Values `json:"limits"`
+
+	Used      int64  `json:"used_bytes"`
+	UsedMonth int64  `json:"used_month_bytes"`
+	Day       string `json:"day"`
+	Month     string `json:"month"`
+
+	QuotaNotified bool `json:"-"`
 }
 
 type State struct {
-	Values
-	Keys      []AccessKey `json:"keys,omitempty"`
-	Used      int64       `json:"used_bytes"`
-	UsedMonth int64       `json:"used_month_bytes"`
-	Day       string      `json:"day"`
-	Month     string      `json:"month"`
+	// Values — значения по умолчанию для новых ключей.
+	Values Values      `json:"defaults"`
+	Keys   []AccessKey `json:"keys,omitempty"`
 }
 
 func Normalize(v Values) Values {
@@ -69,6 +75,12 @@ func (v Values) QuotaMonthBytes() int64 {
 	return v.QuotaMonthMB * 1024 * 1024
 }
 
+func (k *AccessKey) OverQuota() bool {
+	q := k.Limits.QuotaBytes()
+	qm := k.Limits.QuotaMonthBytes()
+	return (q > 0 && k.Used >= q) || (qm > 0 && k.UsedMonth >= qm)
+}
+
 // DomainList нормализует список: нижний регистр, без "*." и точек по краям.
 // Пустой результат означает "разрешено всё".
 func DomainList(s string) []string {
@@ -99,11 +111,14 @@ func Load(path string) (State, error) {
 		return st, err
 	}
 	st.Values = Normalize(st.Values)
-	if st.Used < 0 {
-		st.Used = 0
-	}
-	if st.UsedMonth < 0 {
-		st.UsedMonth = 0
+	for i := range st.Keys {
+		st.Keys[i].Limits = Normalize(st.Keys[i].Limits)
+		if st.Keys[i].Used < 0 {
+			st.Keys[i].Used = 0
+		}
+		if st.Keys[i].UsedMonth < 0 {
+			st.Keys[i].UsedMonth = 0
+		}
 	}
 	return st, nil
 }

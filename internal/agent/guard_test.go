@@ -7,12 +7,11 @@ func TestGuardDomains(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !g.allowedHost("anything.example") {
+	if !g.allowedHost("", "anything.example") {
 		t.Fatal("пустой список должен разрешать любой домен")
 	}
 
-	g.SetDomains("example.com, *.company.com, 203.0.113.7")
-
+	spec := "example.com, *.company.com, 203.0.113.7"
 	cases := []struct {
 		host string
 		want bool
@@ -29,7 +28,7 @@ func TestGuardDomains(t *testing.T) {
 		{"203.0.113.8", false},
 	}
 	for _, c := range cases {
-		if got := g.allowedHost(c.host); got != c.want {
+		if got := g.allowedHost(spec, c.host); got != c.want {
 			t.Errorf("allowedHost(%q) = %v, want %v", c.host, got, c.want)
 		}
 	}

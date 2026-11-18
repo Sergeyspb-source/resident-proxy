@@ -1,5 +1,5 @@
 // Пакет agent — программа на ПК коллеги: держит туннель до шлюза,
-// выполняет исходящие соединения и показывает всё в локальной панели.
+// выполняет исходящие соединения и применяет лимиты конкретного ключа.
 package agent
 
 import (
@@ -59,29 +59,22 @@ type Agent struct {
 	sys     *monitor.System
 	started time.Time
 
-	enabled atomic.Bool
-	limiter *rate.Limiter
+	enabled   atomic.Bool
+	inFlight  atomic.Int32
+	keysDirty atomic.Bool
+	saveMu    sync.Mutex
+
+	stateMu       sync.Mutex
+	keys          []limits.AccessKey
+	defaultLimits limits.Values
+	limiters      map[string]*rate.Limiter
+	limPath       string
+	limDirty      bool
 
 	mu   sync.Mutex
 	sess *yamux.Session
 
-	keysMu sync.Mutex
-	keys   []limits.AccessKey
-
-	limMu       sync.Mutex
-	limits      limits.Values
-	used        int64
-	usedDay     string
-	usedMonth   int64
-	usedMonthAt string
-	limPath     string
-	limDirty    bool
-	quotaLogged bool
-	ticks       int
-
-	inFlight  atomic.Int32
-	keysDirty atomic.Bool
-	saveMu    sync.Mutex
+	ticks int
 }
 
 func New(cfg Config, logger *log.Logger) (*Agent, error) {
@@ -98,84 +91,60 @@ func New(cfg Config, logger *log.Logger) (*Agent, error) {
 	}
 
 	a := &Agent{
-		cfg:     cfg,
-		log:     logger,
-		guard:   guard,
-		reg:     monitor.NewRegistry(),
-		sys:     monitor.NewSystem(),
-		started: time.Now(),
-		limiter: rate.NewLimiter(rate.Inf, 64<<10),
-		limits: limits.Normalize(limits.Values{
-			QuotaMB:  cfg.QuotaMB,
-			RateKBps: cfg.RateKBps,
-			Domains:  cfg.Domains,
-		}),
-		usedDay: time.Now().Format(dayLayout),
-		limPath: statePath(),
+		cfg:           cfg,
+		log:           logger,
+		guard:         guard,
+		reg:           monitor.NewRegistry(),
+		sys:           monitor.NewSystem(),
+		started:       time.Now(),
+		limiters:      make(map[string]*rate.Limiter),
+		defaultLimits: limits.Normalize(limits.Values{QuotaMB: cfg.QuotaMB, RateKBps: cfg.RateKBps, Domains: cfg.Domains}),
+		limPath:       statePath(),
 	}
 
+	migrated := false
 	if a.limPath != "" {
-		migrated := false
 		st, err := limits.Load(a.limPath)
 		if err != nil && a.limPath != legacyStatePath() {
 			if old, oldErr := limits.Load(legacyStatePath()); oldErr == nil {
 				st, err = old, nil
-				a.limDirty = true
 				migrated = true
 			}
 		}
 		if err == nil {
-			a.limits = st.Values
-			a.used = st.Used
-			a.usedMonth = st.UsedMonth
 			a.keys = st.Keys
-			if st.Day != "" {
-				a.usedDay = st.Day
-			}
-			if st.Month != "" {
-				a.usedMonthAt = st.Month
+			a.defaultLimits = st.Values
+			if migrated {
+				// В старом формате лимиты были общими на узел.
+				// Переносим их на ключи, у которых своих ещё нет.
+				for i := range a.keys {
+					if isZeroValues(a.keys[i].Limits) {
+						a.keys[i].Limits = st.Values
+					}
+				}
 			}
 		} else {
 			a.log.Printf("состояние не загружено: %v", err)
 		}
-		if migrated {
-			// Переносим состояние в приватный каталог и убираем старую копию
-			// с ключами из папки программы.
-			a.flushLimits()
-			_ = os.Remove(legacyStatePath())
-		}
 	}
 
-	a.limMu.Lock()
-	a.rollLocked()
-	a.applyLimitsLocked()
-	a.limMu.Unlock()
+	a.stateMu.Lock()
+	for i := range a.keys {
+		a.rollKeyLocked(&a.keys[i])
+	}
+	a.stateMu.Unlock()
 
-	a.log.Printf("ограничения: квота %d МБ/сутки, скорость %d КБ/с, доменов в списке: %d",
-		a.limits.QuotaMB, a.limits.RateKBps, len(limits.DomainList(a.limits.Domains)))
+	if migrated {
+		a.flushLimits()
+		_ = os.Remove(legacyStatePath())
+	}
 
+	a.log.Printf("ключей: %d", len(a.keys))
 	return a, nil
 }
 
-// statePath хранит состояние в приватном каталоге пользователя.
-// GPT: рядом с exe файл мог оказаться в Downloads или Program Files,
-// где права наследуются от каталога и ключи читаются другими пользователями.
-func statePath() string {
-	if dir, err := os.UserCacheDir(); err == nil {
-		base := filepath.Join(dir, "exitnode")
-		if err := os.MkdirAll(base, 0o700); err == nil {
-			return filepath.Join(base, "agent-state.json")
-		}
-	}
-	return legacyStatePath()
-}
-
-func legacyStatePath() string {
-	exe, err := os.Executable()
-	if err != nil {
-		return ""
-	}
-	return filepath.Join(filepath.Dir(exe), "agent-state.json")
+func isZeroValues(v limits.Values) bool {
+	return v.QuotaMB == 0 && v.QuotaMonthMB == 0 && v.RateKBps == 0 && v.Domains == ""
 }
 
 func (a *Agent) Run() error {
@@ -209,7 +178,7 @@ func (a *Agent) tickLoop() {
 	}
 }
 
-// connectLoop держит туннель: при обрыве переподключается с паузой.
+// connectLoop держит туннель: при обрыве переподключается с паузой и разбросом.
 func (a *Agent) connectLoop() {
 	backoff := time.Second
 	for {
@@ -333,17 +302,24 @@ func (a *Agent) connected() bool {
 	return a.sess != nil && !a.sess.IsClosed()
 }
 
-// handleStream обслуживает одну сессию: проверка, соединение с целью, передача байтов.
+func (a *Agent) session() *yamux.Session {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.sess == nil || a.sess.IsClosed() {
+		return nil
+	}
+	return a.sess
+}
+
+// handleStream обслуживает одну сессию: проверяет ключ и его лимиты,
+// затем соединяется с целью и передаёт байты.
 func (a *Agent) handleStream(st *yamux.Stream) {
 	n := a.inFlight.Add(1)
 	defer a.inFlight.Add(-1)
 
 	bc := protocol.NewBufConn(st)
 	if int(n) > a.cfg.MaxSessions {
-		_ = protocol.WriteJSON(bc, protocol.Reply{
-			Code:  protocol.CodeNotAllowed,
-			Error: "узел перегружен",
-		})
+		_ = protocol.WriteJSON(bc, protocol.Reply{Code: protocol.CodeNotAllowed, Error: "узел перегружен"})
 		st.Close()
 		return
 	}
@@ -356,25 +332,40 @@ func (a *Agent) handleStream(st *yamux.Stream) {
 	}
 
 	if !a.enabled.Load() {
-		_ = protocol.WriteJSON(bc, protocol.Reply{
-			Code:  protocol.CodeNotAllowed,
-			Error: "узел выключен пользователем",
-		})
+		_ = protocol.WriteJSON(bc, protocol.Reply{Code: protocol.CodeNotAllowed, Error: "узел выключен пользователем"})
 		st.Close()
 		return
 	}
-	if a.overQuota() {
-		_ = protocol.WriteJSON(bc, protocol.Reply{
-			Code:  protocol.CodeNotAllowed,
-			Error: "суточная квота трафика исчерпана",
-		})
+
+	a.stateMu.Lock()
+	idx := a.findKeyLocked(req.KeyID)
+	if idx < 0 {
+		a.stateMu.Unlock()
+		_ = protocol.WriteJSON(bc, protocol.Reply{Code: protocol.CodeNotAllowed, Error: "ключ отозван"})
 		st.Close()
 		return
 	}
+	key := &a.keys[idx]
+	a.rollKeyLocked(key)
+	over := key.OverQuota()
+	domains := key.Limits.Domains
+	label := key.Label
+	limiter := a.limiterForLocked(req.KeyID)
+	a.stateMu.Unlock()
+
+	if over {
+		_ = protocol.WriteJSON(bc, protocol.Reply{Code: protocol.CodeNotAllowed, Error: "квота трафика исчерпана"})
+		st.Close()
+		return
+	}
+	if label != "" {
+		req.Client = label
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 
-	addr, err := a.guard.Resolve(ctx, req.Host, req.Port)
+	addr, err := a.guard.Resolve(ctx, req.Host, req.Port, domains)
 	if err != nil {
 		code := protocol.CodeGeneral
 		var oe *protocol.OpenError
@@ -410,24 +401,24 @@ func (a *Agent) handleStream(st *yamux.Stream) {
 	_ = st.SetReadDeadline(time.Time{})
 
 	sessCtx, sessCancel := context.WithCancel(context.Background())
-	sess := a.reg.Add(req.Client, req.Host, req.Port, bc, sessCancel)
+	sess := a.reg.Add(req.Client, req.KeyID, req.Host, req.Port, bc, sessCancel)
 	defer a.reg.Remove(sess.ID)
 
 	metered := &meterConn{
 		Conn: bc,
 		onRead: func(n int64) {
 			sess.AddIn(n)
-			a.addTraffic(n)
+			a.addTraffic(req.KeyID, n)
 		},
 		onWrite: func(n int64) {
 			sess.AddOut(n)
-			a.addTraffic(n)
+			a.addTraffic(req.KeyID, n)
 		},
 		ctx:     sessCtx,
-		limiter: a.limiter,
+		limiter: limiter,
 	}
 
-	a.log.Printf("сессия #%d: %q:%d", sess.ID, req.Host, req.Port)
+	a.log.Printf("сессия #%d (%q): %q:%d", sess.ID, req.Client, req.Host, req.Port)
 	protocol.Join(metered, target)
 	a.log.Printf("сессия #%d закрыта: принято %s, отдано %s",
 		sess.ID, humanBytes(sess.In()), humanBytes(sess.Out()))
@@ -445,9 +436,7 @@ func dialCode(err error) int {
 }
 
 // meterConn считает байты в момент передачи, чтобы скорость обновлялась вживую,
-// и попутно тормозит поток до заданного лимита.
-// GPT: ожидание лимитера привязано к контексту сессии, иначе после закрытия
-// потока горутина висела бы в WaitN до пополнения токенов.
+// и попутно тормозит поток до лимита конкретного ключа.
 type meterConn struct {
 	net.Conn
 	onRead  func(int64)
@@ -496,35 +485,33 @@ func (a *Agent) SetEnabled(v bool) { a.enabled.Store(v) }
 
 func (a *Agent) KillAll() { a.reg.KillAll() }
 
-// Keys отдаёт панели список ключей. Сами значения не отдаются:
-// их можно получить только отдельным запросом по конкретному ключу.
+// Autostart показывает и меняет запись в автозагрузке Windows.
+func (a *Agent) Autostart() bool { return desktop.AutostartEnabled() }
+
+func (a *Agent) SetAutostart(v bool) error { return desktop.SetAutostart(v) }
+
+// Keys отдаёт панели список пользователей. Значения ключей замаскированы.
 func (a *Agent) Keys() []ui.KeyView {
-	a.keysMu.Lock()
-	defer a.keysMu.Unlock()
+	a.stateMu.Lock()
+	defer a.stateMu.Unlock()
+
 	out := make([]ui.KeyView, 0, len(a.keys))
-	for _, k := range a.keys {
-		out = append(out, ui.KeyView{ID: k.ID, Label: k.Label, Value: maskKey(k.Value)})
+	for i := range a.keys {
+		a.rollKeyLocked(&a.keys[i])
+		out = append(out, keyView(&a.keys[i]))
 	}
 	return out
 }
 
 // KeyValue возвращает полный ключ по запросу из панели.
 func (a *Agent) KeyValue(id string) (string, error) {
-	a.keysMu.Lock()
-	defer a.keysMu.Unlock()
-	for _, k := range a.keys {
-		if k.ID == id {
-			return k.Value, nil
-		}
+	a.stateMu.Lock()
+	defer a.stateMu.Unlock()
+	idx := a.findKeyLocked(id)
+	if idx < 0 {
+		return "", errors.New("ключ не найден")
 	}
-	return "", errors.New("ключ не найден")
-}
-
-func maskKey(v string) string {
-	if len(v) <= 12 {
-		return v
-	}
-	return v[:4] + "…" + v[len(v)-4:]
+	return a.keys[idx].Value, nil
 }
 
 // AddKey создаёт ключ доступа и сразу сообщает его шлюзу.
@@ -533,8 +520,8 @@ func (a *Agent) AddKey(label string) (ui.KeyView, error) {
 	if label == "" {
 		return ui.KeyView{}, errors.New("нужна подпись, чтобы отличать коллег")
 	}
-	if len(label) > 40 {
-		label = label[:40]
+	if len([]rune(label)) > 40 {
+		label = string([]rune(label)[:40])
 	}
 
 	buf := make([]byte, 32)
@@ -543,47 +530,55 @@ func (a *Agent) AddKey(label string) (ui.KeyView, error) {
 	}
 	value := base64.RawURLEncoding.EncodeToString(buf)
 
-	a.keysMu.Lock()
-	if len(a.keys) >= 100 {
-		a.keysMu.Unlock()
-		return ui.KeyView{}, errors.New("слишком много ключей")
-	}
 	idBuf := make([]byte, 8)
 	if _, err := rand.Read(idBuf); err != nil {
-		a.keysMu.Unlock()
 		return ui.KeyView{}, err
 	}
+
+	a.stateMu.Lock()
+	if len(a.keys) >= 100 {
+		a.stateMu.Unlock()
+		return ui.KeyView{}, errors.New("слишком много ключей")
+	}
+	now := time.Now()
 	key := limits.AccessKey{
-		ID:    base64.RawURLEncoding.EncodeToString(idBuf),
-		Label: label,
-		Value: value,
+		ID:     base64.RawURLEncoding.EncodeToString(idBuf),
+		Label:  label,
+		Value:  value,
+		Limits: a.defaultLimits,
+		Day:    now.Format(dayLayout),
+		Month:  now.Format("2006-01"),
 	}
 	a.keys = append(a.keys, key)
-	a.keysMu.Unlock()
+	a.limDirty = true
+	view := keyView(&a.keys[len(a.keys)-1])
+	a.stateMu.Unlock()
 
 	a.keysDirty.Store(true)
 	a.saveState()
 	a.notifyKeys()
 	a.log.Printf("добавлен ключ доступа: %s", label)
-	return ui.KeyView{ID: key.ID, Label: key.Label, Value: key.Value}, nil
+	return view, nil
 }
 
 // RemoveKey отзывает ключ: шлюз перестаёт пускать его владельца.
 func (a *Agent) RemoveKey(id string) error {
-	a.keysMu.Lock()
-	found := false
-	out := a.keys[:0]
-	for _, k := range a.keys {
-		if k.ID == id {
-			found = true
-			continue
+	a.stateMu.Lock()
+	found := -1
+	for i := range a.keys {
+		if a.keys[i].ID == id {
+			found = i
+			break
 		}
-		out = append(out, k)
 	}
-	a.keys = out
-	a.keysMu.Unlock()
+	if found >= 0 {
+		a.keys = append(a.keys[:found], a.keys[found+1:]...)
+		delete(a.limiters, id)
+	}
+	a.limDirty = true
+	a.stateMu.Unlock()
 
-	if !found {
+	if found < 0 {
 		return errors.New("ключ не найден")
 	}
 	a.keysDirty.Store(true)
@@ -593,12 +588,161 @@ func (a *Agent) RemoveKey(id string) error {
 	return nil
 }
 
+// SetKeyLimits применяет сайты, квоты и скорость конкретного пользователя.
+func (a *Agent) SetKeyLimits(id string, v ui.KeyLimits) (ui.KeyView, error) {
+	norm := limits.Normalize(limits.Values{
+		QuotaMB:      v.QuotaMB,
+		QuotaMonthMB: v.QuotaMonthMB,
+		RateKBps:     v.RateKBps,
+		Domains:      v.Domains,
+	})
+
+	a.stateMu.Lock()
+	idx := a.findKeyLocked(id)
+	if idx < 0 {
+		a.stateMu.Unlock()
+		return ui.KeyView{}, errors.New("ключ не найден")
+	}
+	key := &a.keys[idx]
+	key.Limits = norm
+	key.QuotaNotified = false
+	if l, ok := a.limiters[id]; ok {
+		applyRate(l, norm.RateKBps)
+	}
+	over := key.OverQuota()
+	view := keyView(key)
+	a.limDirty = true
+	a.stateMu.Unlock()
+
+	a.flushLimits()
+	if over {
+		a.reg.KillByKey(id)
+	}
+	a.log.Printf("лимиты обновлены: квота %d/%d МБ, скорость %d КБ/с, доменов: %d",
+		norm.QuotaMB, norm.QuotaMonthMB, norm.RateKBps, len(limits.DomainList(norm.Domains)))
+	return view, nil
+}
+
+func keyView(k *limits.AccessKey) ui.KeyView {
+	return ui.KeyView{
+		ID:              k.ID,
+		Label:           k.Label,
+		Value:           maskKey(k.Value),
+		QuotaMB:         k.Limits.QuotaMB,
+		QuotaMonthMB:    k.Limits.QuotaMonthMB,
+		RateKBps:        k.Limits.RateKBps,
+		Domains:         k.Limits.Domains,
+		UsedBytes:       k.Used,
+		UsedMonthBytes:  k.UsedMonth,
+		QuotaBytes:      k.Limits.QuotaBytes(),
+		QuotaMonthBytes: k.Limits.QuotaMonthBytes(),
+	}
+}
+
+func maskKey(v string) string {
+	if len(v) <= 12 {
+		return v
+	}
+	return v[:4] + "…" + v[len(v)-4:]
+}
+
+func (a *Agent) findKeyLocked(id string) int {
+	for i := range a.keys {
+		if a.keys[i].ID == id {
+			return i
+		}
+	}
+	return -1
+}
+
+func (a *Agent) rollKeyLocked(k *limits.AccessKey) {
+	now := time.Now()
+	today := now.Format(dayLayout)
+	month := now.Format("2006-01")
+	if k.Day != today {
+		k.Day = today
+		k.Used = 0
+		k.QuotaNotified = false
+		a.limDirty = true
+	}
+	if k.Month != month {
+		k.Month = month
+		k.UsedMonth = 0
+		k.QuotaNotified = false
+		a.limDirty = true
+	}
+}
+
+// limiterForLocked возвращает лимитер ключа; stateMu должен быть захвачен.
+func (a *Agent) limiterForLocked(id string) *rate.Limiter {
+	l, ok := a.limiters[id]
+	if !ok {
+		l = rate.NewLimiter(rate.Inf, 64<<10)
+		a.limiters[id] = l
+	}
+	if idx := a.findKeyLocked(id); idx >= 0 {
+		applyRate(l, a.keys[idx].Limits.RateKBps)
+	}
+	return l
+}
+
+func applyRate(l *rate.Limiter, kbps int64) {
+	if kbps <= 0 {
+		l.SetLimit(rate.Inf)
+		l.SetBurst(64 << 10)
+		return
+	}
+	r := rate.Limit(kbps * 1024)
+	burst := int(r / 4)
+	if burst < 64<<10 {
+		burst = 64 << 10
+	}
+	if burst > 1<<20 {
+		burst = 1 << 20
+	}
+	l.SetLimit(r)
+	l.SetBurst(burst)
+}
+
+func (a *Agent) addTraffic(keyID string, n int64) {
+	if n <= 0 || keyID == "" {
+		return
+	}
+
+	a.stateMu.Lock()
+	idx := a.findKeyLocked(keyID)
+	if idx < 0 {
+		a.stateMu.Unlock()
+		return
+	}
+	key := &a.keys[idx]
+	a.rollKeyLocked(key)
+	key.Used += n
+	key.UsedMonth += n
+	over := key.OverQuota() && !key.QuotaNotified
+	label := key.Label
+	if over {
+		key.QuotaNotified = true
+	}
+	a.limDirty = true
+	a.stateMu.Unlock()
+
+	if over {
+		a.log.Printf("квота исчерпана у пользователя %q, сессии остановлены", label)
+		a.reg.KillByKey(keyID)
+		// GPT: при достижении квоты сразу пишем состояние на диск,
+		// чтобы перезапуск не обнулил счётчик.
+		a.flushLimits()
+	}
+}
+
 func (a *Agent) keyHashes() []protocol.Key {
-	a.keysMu.Lock()
-	defer a.keysMu.Unlock()
+	a.stateMu.Lock()
+	defer a.stateMu.Unlock()
 	out := make([]protocol.Key, 0, len(a.keys))
-	for _, k := range a.keys {
-		out = append(out, protocol.Key{Label: k.Label, Hash: keyHash(k.Value)})
+	for i := range a.keys {
+		k := &a.keys[i]
+		out = append(out, protocol.Key{ID: k.ID, Label: k.Label, Hash: keyHash(k.Value)})
 	}
 	return out
 }
@@ -609,13 +753,13 @@ func keyHash(value string) string {
 }
 
 func (a *Agent) saveState() {
-	a.limMu.Lock()
+	a.stateMu.Lock()
 	a.limDirty = true
-	a.limMu.Unlock()
+	a.stateMu.Unlock()
 	a.flushLimits()
 }
 
-// notifyKeys отправляет шлюзу актуальный список хешей без разрыва туннеля.
+// notifyKeys отправляет шлюзу актуальный список ключей без разрыва туннеля.
 // Повторяется по таймеру, пока шлюз не подтвердит доставку.
 func (a *Agent) notifyKeys() {
 	if !a.keysDirty.Load() {
@@ -637,165 +781,18 @@ func (a *Agent) notifyKeys() {
 	a.keysDirty.Store(false)
 }
 
-func (a *Agent) session() *yamux.Session {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	if a.sess == nil || a.sess.IsClosed() {
-		return nil
-	}
-	return a.sess
-}
-
-// Autostart показывает и меняет запись в автозагрузке Windows.
-func (a *Agent) Autostart() bool { return desktop.AutostartEnabled() }
-
-func (a *Agent) SetAutostart(v bool) error { return desktop.SetAutostart(v) }
-
-// Limits отдаёт панели текущие настройки и расход.
-func (a *Agent) Limits() ui.LimitsView {
-	a.limMu.Lock()
-	defer a.limMu.Unlock()
-	a.rollLocked()
-	return ui.LimitsView{
-		QuotaMB:         a.limits.QuotaMB,
-		QuotaMonthMB:    a.limits.QuotaMonthMB,
-		RateKBps:        a.limits.RateKBps,
-		Domains:         a.limits.Domains,
-		UsedBytes:       a.used,
-		QuotaBytes:      a.limits.QuotaBytes(),
-		UsedMonthBytes:  a.usedMonth,
-		QuotaMonthBytes: a.limits.QuotaMonthBytes(),
-	}
-}
-
-// SetLimits применяет настройки сразу, без перезапуска, и сохраняет их на диск.
-func (a *Agent) SetLimits(v ui.LimitsView) error {
-	if v.QuotaMB < 0 || v.QuotaMonthMB < 0 || v.RateKBps < 0 {
-		return errors.New("значения не могут быть отрицательными")
-	}
-	norm := limits.Normalize(limits.Values{
-		QuotaMB:      v.QuotaMB,
-		QuotaMonthMB: v.QuotaMonthMB,
-		RateKBps:     v.RateKBps,
-		Domains:      v.Domains,
-	})
-
-	a.limMu.Lock()
-	a.limits = norm
-	a.quotaLogged = false
-	a.applyLimitsLocked()
-	a.limDirty = true
-	over := a.overQuotaLocked()
-	a.limMu.Unlock()
-
-	a.flushLimits()
-	if over {
-		a.reg.KillAll()
-	}
-	a.log.Printf("ограничения обновлены: квота %d МБ/сутки и %d МБ/месяц, скорость %d КБ/с, доменов: %d",
-		norm.QuotaMB, norm.QuotaMonthMB, norm.RateKBps, len(limits.DomainList(norm.Domains)))
-	return nil
-}
-
-func (a *Agent) addTraffic(n int64) {
-	if n <= 0 {
-		return
-	}
-	a.limMu.Lock()
-	a.rollLocked()
-	a.used += n
-	a.usedMonth += n
-	over := a.overQuotaLocked() && !a.quotaLogged
-	if over {
-		a.quotaLogged = true
-	}
-	a.limDirty = true
-	a.limMu.Unlock()
-
-	if over {
-		a.log.Printf("квота исчерпана, все подключения остановлены")
-		a.reg.KillAll()
-		// GPT: при достижении квоты сразу пишем состояние на диск,
-		// чтобы перезапуск не обнулил счётчик.
-		a.flushLimits()
-	}
-}
-
-func (a *Agent) overQuota() bool {
-	a.limMu.Lock()
-	defer a.limMu.Unlock()
-	a.rollLocked()
-	return a.overQuotaLocked()
-}
-
-func (a *Agent) overQuotaLocked() bool {
-	qDay := a.limits.QuotaBytes()
-	qMonth := a.limits.QuotaMonthBytes()
-	overDay := qDay > 0 && a.used >= qDay
-	overMonth := qMonth > 0 && a.usedMonth >= qMonth
-	return overDay || overMonth
-}
-
-// rollLocked сбрасывает расход при смене суток и месяца.
-func (a *Agent) rollLocked() {
-	now := time.Now()
-	today := now.Format(dayLayout)
-	month := now.Format("2006-01")
-
-	if a.usedDay != today {
-		a.usedDay = today
-		a.used = 0
-		a.quotaLogged = false
-		a.limDirty = true
-	}
-	if a.usedMonthAt != month {
-		a.usedMonthAt = month
-		a.usedMonth = 0
-		a.quotaLogged = false
-		a.limDirty = true
-	}
-}
-
-func (a *Agent) applyLimitsLocked() {
-	a.guard.SetDomains(a.limits.Domains)
-
-	if a.limits.RateKBps <= 0 {
-		a.limiter.SetLimit(rate.Inf)
-		a.limiter.SetBurst(64 << 10)
-		return
-	}
-	r := rate.Limit(a.limits.RateKBps * 1024)
-	burst := int(r / 4)
-	if burst < 64<<10 {
-		burst = 64 << 10
-	}
-	if burst > 1<<20 {
-		burst = 1 << 20
-	}
-	a.limiter.SetLimit(r)
-	a.limiter.SetBurst(burst)
-}
-
 func (a *Agent) flushLimits() {
-	a.limMu.Lock()
+	a.stateMu.Lock()
 	if !a.limDirty || a.limPath == "" {
-		a.limMu.Unlock()
+		a.stateMu.Unlock()
 		return
 	}
-	a.keysMu.Lock()
-	keys := append([]limits.AccessKey(nil), a.keys...)
-	a.keysMu.Unlock()
-
 	st := limits.State{
-		Values:    a.limits,
-		Keys:      keys,
-		Used:      a.used,
-		UsedMonth: a.usedMonth,
-		Day:       a.usedDay,
-		Month:     a.usedMonthAt,
+		Values: a.defaultLimits,
+		Keys:   append([]limits.AccessKey(nil), a.keys...),
 	}
 	a.limDirty = false
-	a.limMu.Unlock()
+	a.stateMu.Unlock()
 
 	// GPT: несколько горутин писали в один tmp-файл и могли оставить битый JSON.
 	a.saveMu.Lock()
@@ -803,11 +800,32 @@ func (a *Agent) flushLimits() {
 	a.saveMu.Unlock()
 
 	if err != nil {
-		a.log.Printf("не удалось сохранить настройки: %v", err)
-		a.limMu.Lock()
+		a.log.Printf("не удалось сохранить состояние: %v", err)
+		a.stateMu.Lock()
 		a.limDirty = true
-		a.limMu.Unlock()
+		a.stateMu.Unlock()
 	}
+}
+
+// statePath хранит состояние в приватном каталоге пользователя.
+// GPT: рядом с exe файл мог оказаться в Downloads или Program Files,
+// где права наследуются от каталога и ключи читаются другими пользователями.
+func statePath() string {
+	if dir, err := os.UserCacheDir(); err == nil {
+		base := filepath.Join(dir, "exitnode")
+		if err := os.MkdirAll(base, 0o700); err == nil {
+			return filepath.Join(base, "agent-state.json")
+		}
+	}
+	return legacyStatePath()
+}
+
+func legacyStatePath() string {
+	exe, err := os.Executable()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(filepath.Dir(exe), "agent-state.json")
 }
 
 func humanBytes(n uint64) string {

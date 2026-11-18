@@ -27,23 +27,28 @@ type Info struct {
 	MaxSessions int
 }
 
-// LimitsView — ограничения узла и расход за сегодня и за месяц.
-type LimitsView struct {
+// KeyView — пользователь (ключ) с его лимитами и расходом.
+type KeyView struct {
+	ID              string `json:"id"`
+	Label           string `json:"label"`
+	Value           string `json:"value"`
 	QuotaMB         int64  `json:"quota_mb"`
 	QuotaMonthMB    int64  `json:"quota_month_mb"`
 	RateKBps        int64  `json:"rate_kbps"`
 	Domains         string `json:"domains"`
 	UsedBytes       int64  `json:"used_bytes"`
-	QuotaBytes      int64  `json:"quota_bytes"`
 	UsedMonthBytes  int64  `json:"used_month_bytes"`
+	QuotaBytes      int64  `json:"quota_bytes"`
 	QuotaMonthBytes int64  `json:"quota_month_bytes"`
+	Online          int    `json:"online"`
 }
 
-// KeyView — ключ доступа, который владелец узла передаёт коллеге.
-type KeyView struct {
-	ID    string `json:"id"`
-	Label string `json:"label"`
-	Value string `json:"value"`
+// KeyLimits — то, что панель сохраняет для одного пользователя.
+type KeyLimits struct {
+	QuotaMB      int64  `json:"quota_mb"`
+	QuotaMonthMB int64  `json:"quota_month_mb"`
+	RateKBps     int64  `json:"rate_kbps"`
+	Domains      string `json:"domains"`
 }
 
 // Controller — действия, доступные с панели.
@@ -51,12 +56,11 @@ type Controller interface {
 	Info() Info
 	SetEnabled(bool)
 	KillAll()
-	Limits() LimitsView
-	SetLimits(LimitsView) error
 	Keys() []KeyView
 	AddKey(string) (KeyView, error)
 	RemoveKey(string) error
 	KeyValue(string) (string, error)
+	SetKeyLimits(string, KeyLimits) (KeyView, error)
 	Autostart() bool
 	SetAutostart(bool) error
 }
@@ -68,8 +72,6 @@ type state struct {
 	Enabled     bool                      `json:"enabled"`
 	Uptime      int64                     `json:"uptime"`
 	MaxSessions int                       `json:"max_sessions"`
-	Limits      LimitsView                `json:"limits"`
-	Quota       bool                      `json:"quota_exceeded"`
 	Keys        []KeyView                 `json:"keys"`
 	Autostart   bool                      `json:"autostart"`
 	Sessions    []monitor.SessionSnapshot `json:"sessions"`
@@ -106,14 +108,13 @@ func Serve(addr string, reg *monitor.Registry, ctrl Controller, sys *monitor.Sys
 	mux.HandleFunc("/api/state", h.getState)
 	mux.HandleFunc("/api/toggle", h.toggle)
 	mux.HandleFunc("/api/kill", h.kill)
-	mux.HandleFunc("/api/limits", h.setLimits)
 	mux.HandleFunc("/api/keys/add", h.addKey)
 	mux.HandleFunc("/api/keys/remove", h.removeKey)
 	mux.HandleFunc("/api/keys/reveal", h.revealKey)
+	mux.HandleFunc("/api/keys/limits", h.setKeyLimits)
 	mux.HandleFunc("/api/autostart", h.setAutostart)
 
 	// GPT: проверка Host и RemoteAddr закрывает DNS-rebinding на панель.
-	// Без неё страница evil.com могла переехать на 127.0.0.1 и прочитать ключи.
 	guard := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !validRequest(r) {
 			http.Error(w, "forbidden", http.StatusForbidden)
@@ -166,7 +167,6 @@ func (h *handler) index(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
-	w.Header().Set("X-Content-Type-Options", "nosniff")
 	_, _ = w.Write(indexHTML)
 }
 
@@ -175,12 +175,22 @@ func (h *handler) getState(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+
 	info := h.ctrl.Info()
 	snap := h.reg.Snapshot()
 	sys := h.sys.Snapshot()
-	lim := h.ctrl.Limits()
-	quotaHit := (lim.QuotaBytes > 0 && lim.UsedBytes >= lim.QuotaBytes) ||
-		(lim.QuotaMonthBytes > 0 && lim.UsedMonthBytes >= lim.QuotaMonthBytes)
+	keys := h.ctrl.Keys()
+
+	online := make(map[string]int, len(keys))
+	for _, s := range snap.Sessions {
+		online[s.KeyID]++
+	}
+	for i := range keys {
+		keys[i].Online = online[keys[i].ID]
+	}
+	if keys == nil {
+		keys = []KeyView{}
+	}
 
 	resp := state{
 		Name:        info.Name,
@@ -189,9 +199,7 @@ func (h *handler) getState(w http.ResponseWriter, r *http.Request) {
 		Enabled:     info.Enabled,
 		Uptime:      int64(time.Since(info.Since).Seconds()),
 		MaxSessions: info.MaxSessions,
-		Limits:      lim,
-		Quota:       quotaHit,
-		Keys:        h.ctrl.Keys(),
+		Keys:        keys,
 		Autostart:   h.ctrl.Autostart(),
 		Sessions:    snap.Sessions,
 		InRate:      snap.InRate,
@@ -241,22 +249,6 @@ func (h *handler) kill(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write([]byte(`{"ok":true}`))
 }
 
-func (h *handler) setLimits(w http.ResponseWriter, r *http.Request) {
-	if !checkPost(w, r) {
-		return
-	}
-	var body LimitsView
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&body); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest)
-		return
-	}
-	if err := h.ctrl.SetLimits(body); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	_, _ = w.Write([]byte(`{"ok":true}`))
-}
-
 func (h *handler) addKey(w http.ResponseWriter, r *http.Request) {
 	if !checkPost(w, r) {
 		return
@@ -295,24 +287,6 @@ func (h *handler) removeKey(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write([]byte(`{"ok":true}`))
 }
 
-func (h *handler) setAutostart(w http.ResponseWriter, r *http.Request) {
-	if !checkPost(w, r) {
-		return
-	}
-	var body struct {
-		Enabled bool `json:"enabled"`
-	}
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&body); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest)
-		return
-	}
-	if err := h.ctrl.SetAutostart(body.Enabled); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	_, _ = w.Write([]byte(`{"ok":true}`))
-}
-
 func (h *handler) revealKey(w http.ResponseWriter, r *http.Request) {
 	if !checkPost(w, r) {
 		return
@@ -331,6 +305,45 @@ func (h *handler) revealKey(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "value": value})
+}
+
+func (h *handler) setKeyLimits(w http.ResponseWriter, r *http.Request) {
+	if !checkPost(w, r) {
+		return
+	}
+	var body struct {
+		ID string `json:"id"`
+		KeyLimits
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&body); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	key, err := h.ctrl.SetKeyLimits(body.ID, body.KeyLimits)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "key": key})
+}
+
+func (h *handler) setAutostart(w http.ResponseWriter, r *http.Request) {
+	if !checkPost(w, r) {
+		return
+	}
+	var body struct {
+		Enabled bool `json:"enabled"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&body); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	if err := h.ctrl.SetAutostart(body.Enabled); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	_, _ = w.Write([]byte(`{"ok":true}`))
 }
 
 func checkPost(w http.ResponseWriter, r *http.Request) bool {

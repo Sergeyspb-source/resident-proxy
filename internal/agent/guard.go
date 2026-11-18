@@ -6,7 +6,6 @@ import (
 	"net"
 	"strconv"
 	"strings"
-	"sync"
 
 	"exitnode/internal/limits"
 	"exitnode/internal/protocol"
@@ -16,10 +15,8 @@ import (
 // Главная задача — не дать клиенту попасть в локальную сеть коллеги
 // (роутер, принтер, NAS) и в служебные диапазоны.
 type Guard struct {
-	mu      sync.RWMutex
-	ports   map[int]bool
-	any     bool
-	domains []string
+	ports map[int]bool
+	any   bool
 }
 
 func NewGuard(spec string) (*Guard, error) {
@@ -53,21 +50,11 @@ func (g *Guard) allowed(port int) bool {
 	return g.any || g.ports[port]
 }
 
-// SetDomains задаёт белый список. Пустой список означает "разрешено всё".
-func (g *Guard) SetDomains(spec string) {
-	list := limits.DomainList(spec)
-	g.mu.Lock()
-	g.domains = list
-	g.mu.Unlock()
-}
-
-// allowedHost проверяет домен или IP по белому списку.
+// allowedHost проверяет домен или IP по белому списку конкретного ключа.
 // GPT: "example.com" разрешает и сам домен, и любые поддомены —
 // иначе пришлось бы перечислять каждый поддомен вручную.
-func (g *Guard) allowedHost(host string) bool {
-	g.mu.RLock()
-	domains := g.domains
-	g.mu.RUnlock()
+func (g *Guard) allowedHost(spec, host string) bool {
+	domains := limits.DomainList(spec)
 	if len(domains) == 0 {
 		return true
 	}
@@ -89,11 +76,11 @@ func (g *Guard) allowedHost(host string) bool {
 	return false
 }
 
-// Resolve проверяет порт, резолвит имя и возвращает уже проверенный IP.
+// Resolve проверяет порт и домен, резолвит имя и возвращает уже проверенный IP.
 // GPT: агент сам делает DNS и сам подключается по IP, а не по имени —
 // так исключается DNS-rebinding, при котором домен сначала отдаёт
 // публичный адрес, а на момент соединения — локальный.
-func (g *Guard) Resolve(ctx context.Context, host string, port int) (string, error) {
+func (g *Guard) Resolve(ctx context.Context, host string, port int, domains string) (string, error) {
 	if !g.allowed(port) {
 		return "", &protocol.OpenError{
 			Code:    protocol.CodeNotAllowed,
@@ -103,7 +90,7 @@ func (g *Guard) Resolve(ctx context.Context, host string, port int) (string, err
 	if host == "" {
 		return "", &protocol.OpenError{Code: protocol.CodeUnreachable, Message: "пустой адрес"}
 	}
-	if !g.allowedHost(host) {
+	if !g.allowedHost(domains, host) {
 		return "", &protocol.OpenError{
 			Code:    protocol.CodeNotAllowed,
 			Message: "домен не входит в список разрешённых: " + host,

@@ -72,7 +72,6 @@ func (r *Relay) handleSocks(c net.Conn) {
 		return
 	}
 
-	var client string
 	// Доступ всегда по ключу: клиент присылает ключ в поле пароля,
 	// шлюз ищет его хеш среди ключей подключённых узлов.
 	if !hasByte(methods, authUserPass) {
@@ -87,7 +86,7 @@ func (r *Relay) handleSocks(c net.Conn) {
 		_, _ = c.Write([]byte{1, 1})
 		return
 	}
-	link, label, found := r.lookupKey(keyHash(pass))
+	link, keyID, label, found := r.lookupKey(keyHash(pass))
 	if !found {
 		_, _ = c.Write([]byte{1, 1})
 		r.log.Printf("SOCKS: неизвестный ключ (логин %q) от %s", user, c.RemoteAddr())
@@ -96,7 +95,6 @@ func (r *Relay) handleSocks(c net.Conn) {
 	if _, err := c.Write([]byte{1, 0}); err != nil {
 		return
 	}
-	client = label
 
 	req := make([]byte, 4)
 	if _, err := io.ReadFull(br, req); err != nil {
@@ -121,7 +119,7 @@ func (r *Relay) handleSocks(c net.Conn) {
 	}
 	port := int(binary.BigEndian.Uint16(portBuf))
 
-	st, err := r.open(link, protocol.OpenRequest{Host: host, Port: port, Client: client})
+	st, err := r.open(link, protocol.OpenRequest{KeyID: keyID, Host: host, Port: port, Client: label})
 	if err != nil {
 		code := byte(repGeneralFailure)
 		var oe *protocol.OpenError

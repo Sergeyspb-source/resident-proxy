@@ -20,6 +20,7 @@ const historyLen = 60
 type Session struct {
 	ID      int64
 	Client  string
+	KeyID   string
 	Host    string
 	Port    int
 	Started time.Time
@@ -52,6 +53,7 @@ func (s *Session) Close() {
 type SessionSnapshot struct {
 	ID      int64   `json:"id"`
 	Client  string  `json:"client"`
+	KeyID   string  `json:"key_id"`
 	Host    string  `json:"host"`
 	Port    int     `json:"port"`
 	AgeSec  int64   `json:"age"`
@@ -93,13 +95,14 @@ func NewRegistry() *Registry {
 	}
 }
 
-func (r *Registry) Add(client, host string, port int, conn io.Closer, cancel context.CancelFunc) *Session {
+func (r *Registry) Add(client, keyID, host string, port int, conn io.Closer, cancel context.CancelFunc) *Session {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.nextID++
 	s := &Session{
 		ID:      r.nextID,
 		Client:  client,
+		KeyID:   keyID,
 		Host:    host,
 		Port:    port,
 		Started: time.Now(),
@@ -170,6 +173,7 @@ func (r *Registry) Snapshot() Snapshot {
 		snaps = append(snaps, SessionSnapshot{
 			ID:      s.ID,
 			Client:  s.Client,
+			KeyID:   s.KeyID,
 			Host:    s.Host,
 			Port:    s.Port,
 			AgeSec:  int64(time.Since(s.Started).Seconds()),
@@ -199,6 +203,22 @@ func (r *Registry) KillAll() {
 	list := make([]*Session, 0, len(r.sessions))
 	for _, s := range r.sessions {
 		list = append(list, s)
+	}
+	r.mu.Unlock()
+
+	for _, s := range list {
+		s.Close()
+	}
+}
+
+// KillByKey закрывает сессии конкретного пользователя.
+func (r *Registry) KillByKey(keyID string) {
+	r.mu.Lock()
+	list := make([]*Session, 0, len(r.sessions))
+	for _, s := range r.sessions {
+		if s.KeyID == keyID {
+			list = append(list, s)
+		}
 	}
 	r.mu.Unlock()
 
