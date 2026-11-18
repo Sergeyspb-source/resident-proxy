@@ -195,6 +195,8 @@ const (
 	runName = "exitnode"
 )
 
+func AutostartSupported() bool { return true }
+
 func AutostartEnabled() bool {
 	k, err := registry.OpenKey(registry.CURRENT_USER, runKey, registry.QUERY_VALUE)
 	if err != nil {

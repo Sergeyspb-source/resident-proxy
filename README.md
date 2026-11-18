@@ -79,6 +79,31 @@ proxy.exe setup --uninstall
 Подписи кода нет, поэтому при первом запуске SmartScreen покажет «Неизвестный
 издатель» → «Подробнее» → «Выполнить».
 
+## Linux-узел
+
+Агент на Linux работает без трея и окна. Панель — `http://127.0.0.1:17890/`
+на этой машине или через SSH-туннель:
+
+```
+ssh -L 17890:127.0.0.1:17890 user@linux-host
+```
+
+Автозапуск — systemd (пользовательский юнит):
+
+```ini
+[Unit]
+Description=exitnode agent
+After=network-online.target
+
+[Service]
+ExecStart=/home/user/agent agent -relay proxy.example.com:2083 -token-file /home/user/token -public-socks proxy.example.com:2084 -ui 127.0.0.1:17890
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=default.target
+```
+
 ## VPS2 — шлюз
 
 Нужен TLS-сертификат на домен, который указывает на VPS2 (Let's Encrypt).

@@ -286,7 +286,7 @@
           <span>Запускать при входе в Windows и держать в трее</span>
         </label>
       </div>
-      <div class="note">Программа не требует прав администратора. Полный выход — через меню иконки в трее.</div>
+      <div class="note" id="autostartNote">Программа не требует прав администратора. Полный выход — через меню иконки в трее.</div>
     </div>
 
     <div class="res">
@@ -747,6 +747,11 @@ async function poll() {
   if (document.activeElement !== $("autostart")) {
     $("autostart").checked = !!s.autostart;
   }
+  const canAuto = s.can_autostart !== false;
+  $("autostart").disabled = !canAuto;
+  $("autostartNote").textContent = canAuto
+    ? "Программа не требует прав администратора. Полный выход — через меню иконки в трее."
+    : "На этой ОС автозапуск не поддерживается: запускайте программу вручную, панель — по адресу ниже.";
 
   renderChart(s.history || []);
   renderRows(s.sessions || []);

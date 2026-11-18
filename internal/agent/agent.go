@@ -555,14 +555,15 @@ func (m *meterConn) Write(p []byte) (int, error) {
 // Info реализует ui.Controller.
 func (a *Agent) Info() ui.Info {
 	return ui.Info{
-		Name:        a.cfg.Name,
-		Relay:       a.cfg.RelayAddr,
-		Connected:   a.connected(),
-		Enabled:     a.enabled.Load(),
-		Since:       a.started,
-		MaxSessions: a.cfg.MaxSessions,
-		PublicSocks: a.cfg.PublicSocks,
-		Version:     a.cfg.Version,
+		Name:         a.cfg.Name,
+		Relay:        a.cfg.RelayAddr,
+		Connected:    a.connected(),
+		Enabled:      a.enabled.Load(),
+		Since:        a.started,
+		MaxSessions:  a.cfg.MaxSessions,
+		PublicSocks:  a.cfg.PublicSocks,
+		Version:      a.cfg.Version,
+		CanAutostart: desktop.AutostartSupported(),
 	}
 }
 

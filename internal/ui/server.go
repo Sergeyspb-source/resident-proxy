@@ -19,14 +19,15 @@ var indexHTML []byte
 
 // Info — состояние агента, которое панель показывает в шапке.
 type Info struct {
-	Name        string
-	Relay       string
-	Connected   bool
-	Enabled     bool
-	Since       time.Time
-	MaxSessions int
-	PublicSocks string
-	Version     string
+	Name         string
+	Relay        string
+	Connected    bool
+	Enabled      bool
+	Since        time.Time
+	MaxSessions  int
+	PublicSocks  string
+	Version      string
+	CanAutostart bool
 }
 
 // KeyView — пользователь (ключ) с его лимитами и расходом.
@@ -69,25 +70,26 @@ type Controller interface {
 }
 
 type state struct {
-	Name        string                    `json:"name"`
-	Relay       string                    `json:"relay"`
-	Connected   bool                      `json:"connected"`
-	Enabled     bool                      `json:"enabled"`
-	Uptime      int64                     `json:"uptime"`
-	MaxSessions int                       `json:"max_sessions"`
-	Keys        []KeyView                 `json:"keys"`
-	Autostart   bool                      `json:"autostart"`
-	Version     string                    `json:"version"`
-	Sessions    []monitor.SessionSnapshot `json:"sessions"`
-	InRate      float64                   `json:"in_rate"`
-	OutRate     float64                   `json:"out_rate"`
-	TotalIn     uint64                    `json:"total_in"`
-	TotalOut    uint64                    `json:"total_out"`
-	History     []float64                 `json:"history"`
-	CPUProc     float64                   `json:"cpu_proc"`
-	RSSMB       float64                   `json:"rss_mb"`
-	CPUSys      float64                   `json:"cpu_sys"`
-	MemSys      float64                   `json:"mem_sys"`
+	Name         string                    `json:"name"`
+	Relay        string                    `json:"relay"`
+	Connected    bool                      `json:"connected"`
+	Enabled      bool                      `json:"enabled"`
+	Uptime       int64                     `json:"uptime"`
+	MaxSessions  int                       `json:"max_sessions"`
+	Keys         []KeyView                 `json:"keys"`
+	Autostart    bool                      `json:"autostart"`
+	CanAutostart bool                      `json:"can_autostart"`
+	Version      string                    `json:"version"`
+	Sessions     []monitor.SessionSnapshot `json:"sessions"`
+	InRate       float64                   `json:"in_rate"`
+	OutRate      float64                   `json:"out_rate"`
+	TotalIn      uint64                    `json:"total_in"`
+	TotalOut     uint64                    `json:"total_out"`
+	History      []float64                 `json:"history"`
+	CPUProc      float64                   `json:"cpu_proc"`
+	RSSMB        float64                   `json:"rss_mb"`
+	CPUSys       float64                   `json:"cpu_sys"`
+	MemSys       float64                   `json:"mem_sys"`
 }
 
 type handler struct {
@@ -199,25 +201,26 @@ func (h *handler) getState(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp := state{
-		Name:        info.Name,
-		Relay:       info.Relay,
-		Connected:   info.Connected,
-		Enabled:     info.Enabled,
-		Uptime:      int64(time.Since(info.Since).Seconds()),
-		MaxSessions: info.MaxSessions,
-		Keys:        keys,
-		Autostart:   h.ctrl.Autostart(),
-		Version:     info.Version,
-		Sessions:    snap.Sessions,
-		InRate:      snap.InRate,
-		OutRate:     snap.OutRate,
-		TotalIn:     snap.TotalIn,
-		TotalOut:    snap.TotalOut,
-		History:     snap.History,
-		CPUProc:     sys.CPUProc,
-		RSSMB:       sys.RSSMB,
-		CPUSys:      sys.CPUSys,
-		MemSys:      sys.MemSys,
+		Name:         info.Name,
+		Relay:        info.Relay,
+		Connected:    info.Connected,
+		Enabled:      info.Enabled,
+		Uptime:       int64(time.Since(info.Since).Seconds()),
+		MaxSessions:  info.MaxSessions,
+		Keys:         keys,
+		Autostart:    h.ctrl.Autostart(),
+		CanAutostart: info.CanAutostart,
+		Version:      info.Version,
+		Sessions:     snap.Sessions,
+		InRate:       snap.InRate,
+		OutRate:      snap.OutRate,
+		TotalIn:      snap.TotalIn,
+		TotalOut:     snap.TotalOut,
+		History:      snap.History,
+		CPUProc:      sys.CPUProc,
+		RSSMB:        sys.RSSMB,
+		CPUSys:       sys.CPUSys,
+		MemSys:       sys.MemSys,
 	}
 	if resp.Sessions == nil {
 		resp.Sessions = []monitor.SessionSnapshot{}

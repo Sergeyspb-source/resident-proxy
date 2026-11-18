@@ -203,6 +203,11 @@ func runAgent(args []string) {
 		}
 	}()
 
+	if runtime.GOOS != "windows" {
+		log.Printf("панель: %s (без трея; остановите процесс для выхода)", uiURL)
+		select {}
+	}
+
 	desktop.Run(desktop.Hooks{
 		URL:      uiURL,
 		Title:    "Узел выхода",
