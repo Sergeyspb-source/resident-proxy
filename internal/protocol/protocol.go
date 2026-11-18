@@ -14,7 +14,17 @@ import (
 	"github.com/hashicorp/yamux"
 )
 
-const Version = "0.3.0"
+const Version = "0.4.0"
+
+// E2EHost — фиктивная цель, которую видит шлюз. Настоящая цель
+// передаётся уже внутри шифрованного потока.
+const E2EHost = "e2e.invalid"
+
+// E2EConnect — первый кадр шифрованного потока.
+type E2EConnect struct {
+	Host string `json:"host"`
+	Port int    `json:"port"`
+}
 
 // Коды ошибок совпадают с кодами SOCKS5 (RFC 1928), чтобы шлюз отдавал клиенту
 // корректный ответ без дополнительного маппинга.

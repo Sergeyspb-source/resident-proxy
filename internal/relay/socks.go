@@ -2,9 +2,7 @@ package relay
 
 import (
 	"bufio"
-	"crypto/sha256"
 	"encoding/binary"
-	"encoding/hex"
 	"errors"
 	"io"
 	"net"
@@ -86,7 +84,7 @@ func (r *Relay) handleSocks(c net.Conn) {
 		_, _ = c.Write([]byte{1, 1})
 		return
 	}
-	link, keyID, label, found := r.lookupKey(keyHash(pass))
+	link, keyID, label, found := r.lookupKey(pass)
 	if !found {
 		_, _ = c.Write([]byte{1, 1})
 		r.log.Printf("SOCKS: неизвестный ключ (логин %q) от %s", user, c.RemoteAddr())
@@ -220,12 +218,6 @@ func readCreds(br *bufio.Reader) (string, string, bool) {
 		return "", "", false
 	}
 	return string(user), string(pass), true
-}
-
-// keyHash — тот же хеш, что присылает агент в списке ключей.
-func keyHash(value string) string {
-	sum := sha256.Sum256([]byte(value))
-	return hex.EncodeToString(sum[:])
 }
 
 func readAddr(br *bufio.Reader, atyp byte) (string, error) {

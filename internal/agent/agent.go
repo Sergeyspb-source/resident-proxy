@@ -29,6 +29,7 @@ import (
 	"exitnode/internal/limits"
 	"exitnode/internal/monitor"
 	"exitnode/internal/protocol"
+	"exitnode/internal/secure"
 	"exitnode/internal/ui"
 )
 
@@ -351,6 +352,7 @@ func (a *Agent) handleStream(st *yamux.Stream) {
 	over := key.OverQuota()
 	domains := key.Limits.Domains
 	label := key.Label
+	keyValue := key.Value
 	limiter := a.limiterForLocked(req.KeyID)
 	a.stateMu.Unlock()
 
@@ -361,6 +363,11 @@ func (a *Agent) handleStream(st *yamux.Stream) {
 	}
 	if label != "" {
 		req.Client = label
+	}
+
+	if req.Host == protocol.E2EHost {
+		a.serveE2E(bc, st, req, keyValue, domains, limiter)
+		return
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
@@ -420,6 +427,80 @@ func (a *Agent) handleStream(st *yamux.Stream) {
 	}
 
 	a.log.Printf("сессия #%d (%q): %q:%d", sess.ID, req.Client, req.Host, req.Port)
+	protocol.Join(metered, target)
+	a.log.Printf("сессия #%d закрыта: принято %s, отдано %s",
+		sess.ID, humanBytes(sess.In()), humanBytes(sess.Out()))
+}
+
+// serveE2E обслуживает сквозное шифрование: шлюз видит только фиктивный
+// адрес, настоящая цель приходит внутри шифрованного потока.
+func (a *Agent) serveE2E(bc *protocol.BufConn, st *yamux.Stream, req protocol.OpenRequest, keyValue, domains string, limiter *rate.Limiter) {
+	if err := protocol.WriteJSON(bc, protocol.Reply{OK: true}); err != nil {
+		st.Close()
+		return
+	}
+	_ = st.SetReadDeadline(time.Time{})
+
+	sec, err := secure.NewConn(bc, secure.DeriveKey(keyValue))
+	if err != nil {
+		st.Close()
+		return
+	}
+	sbc := protocol.NewBufConn(sec)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	var inner protocol.E2EConnect
+	if err := protocol.ReadJSON(sbc.R, &inner); err != nil {
+		a.log.Printf("e2e: нет запроса цели: %v", err)
+		sec.Close()
+		return
+	}
+	if inner.Host == "" || inner.Port < 1 || inner.Port > 65535 {
+		a.log.Printf("e2e: неверная цель")
+		sec.Close()
+		return
+	}
+
+	addr, err := a.guard.Resolve(ctx, inner.Host, inner.Port, domains)
+	if err != nil {
+		a.log.Printf("e2e отклонено: %v", err)
+		sec.Close()
+		return
+	}
+
+	dialer := net.Dialer{Timeout: 15 * time.Second}
+	target, err := dialer.DialContext(ctx, "tcp", addr)
+	if err != nil {
+		a.log.Printf("e2e: не удалось подключиться к %q:%d: %v", inner.Host, inner.Port, err)
+		sec.Close()
+		return
+	}
+	if tc, ok := target.(*net.TCPConn); ok {
+		_ = tc.SetKeepAlive(true)
+		_ = tc.SetKeepAlivePeriod(30 * time.Second)
+	}
+
+	sessCtx, sessCancel := context.WithCancel(context.Background())
+	sess := a.reg.Add(req.Client, req.KeyID, inner.Host, inner.Port, bc, sessCancel)
+	defer a.reg.Remove(sess.ID)
+
+	metered := &meterConn{
+		Conn: sbc,
+		onRead: func(n int64) {
+			sess.AddIn(n)
+			a.addTraffic(req.KeyID, n)
+		},
+		onWrite: func(n int64) {
+			sess.AddOut(n)
+			a.addTraffic(req.KeyID, n)
+		},
+		ctx:     sessCtx,
+		limiter: limiter,
+	}
+
+	a.log.Printf("сессия #%d (e2e, %q): %q:%d", sess.ID, req.Client, inner.Host, inner.Port)
 	protocol.Join(metered, target)
 	a.log.Printf("сессия #%d закрыта: принято %s, отдано %s",
 		sess.ID, humanBytes(sess.In()), humanBytes(sess.Out()))

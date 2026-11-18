@@ -5,8 +5,10 @@ package client
 
 import (
 	"bufio"
+	"crypto/sha256"
 	"crypto/tls"
 	"encoding/binary"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -17,6 +19,7 @@ import (
 	"time"
 
 	"exitnode/internal/protocol"
+	"exitnode/internal/secure"
 )
 
 type Config struct {
@@ -213,20 +216,34 @@ func (m *Manager) handle(c net.Conn) {
 	port := int(binary.BigEndian.Uint16(portBuf))
 
 	cfg := m.cfgCopy()
-	up, err := dialUpstream(cfg, host, port)
+	up, err := dialUpstream(cfg)
 	if err != nil {
 		m.log.Printf("%s:%d: %v", host, port, err)
 		reply(c, 5)
 		return
 	}
-	if _, err := c.Write([]byte{5, 0, 0, 1, 0, 0, 0, 0, 0, 0}); err != nil {
+
+	sec, err := secure.NewConn(up, secure.DeriveKey(cfg.Key))
+	if err != nil {
 		up.Close()
+		reply(c, 5)
+		return
+	}
+	// Настоящая цель уходит только внутри шифрованного потока.
+	if err := protocol.WriteJSON(sec, protocol.E2EConnect{Host: host, Port: port}); err != nil {
+		sec.Close()
+		reply(c, 5)
+		return
+	}
+
+	if _, err := c.Write([]byte{5, 0, 0, 1, 0, 0, 0, 0, 0, 0}); err != nil {
+		sec.Close()
 		return
 	}
 	_ = c.SetDeadline(time.Time{})
 
 	metered := &countConn{
-		Conn: up,
+		Conn: sec,
 		onRead: func(n int) {
 			m.out.Add(uint64(n))
 		},
@@ -269,9 +286,15 @@ func Run(cfg Config, logger *log.Logger) error {
 	select {}
 }
 
-// dialUpstream проходит SOCKS5-рукопожатие со шлюзом, передавая ключ как пароль.
-func dialUpstream(cfg Config, host string, port int) (net.Conn, error) {
+// dialUpstream проходит SOCKS5-рукопожатие со шлюзом. Вместо пароля
+// отправляется sha256 ключа, а целью указывается фиктивный адрес:
+// шлюз не должен знать ни ключ, ни настоящий сайт.
+func dialUpstream(cfg Config) (net.Conn, error) {
 	if len(cfg.Key) > 255 {
+		return nil, errors.New("ключ слишком длинный")
+	}
+	pass := keyHash(cfg.Key)
+	if len(pass) > 255 {
 		return nil, errors.New("ключ слишком длинный")
 	}
 
@@ -326,8 +349,8 @@ func dialUpstream(cfg Config, host string, port int) (net.Conn, error) {
 	}
 	auth := []byte{1, byte(len(user))}
 	auth = append(auth, user...)
-	auth = append(auth, byte(len(cfg.Key)))
-	auth = append(auth, cfg.Key...)
+	auth = append(auth, byte(len(pass)))
+	auth = append(auth, pass...)
 	if _, err := c.Write(auth); err != nil {
 		return nil, err
 	}
@@ -338,23 +361,10 @@ func dialUpstream(cfg Config, host string, port int) (net.Conn, error) {
 		return nil, errors.New("ключ отклонён шлюзом")
 	}
 
-	req := []byte{5, 1, 0}
-	if ip := net.ParseIP(host); ip != nil {
-		if v4 := ip.To4(); v4 != nil {
-			req = append(req, 1)
-			req = append(req, v4...)
-		} else {
-			req = append(req, 4)
-			req = append(req, ip...)
-		}
-	} else {
-		if len(host) > 255 {
-			return nil, errors.New("слишком длинное имя")
-		}
-		req = append(req, 3, byte(len(host)))
-		req = append(req, host...)
-	}
-	req = append(req, byte(port>>8), byte(port))
+	h := protocol.E2EHost
+	req := []byte{5, 1, 0, 3, byte(len(h))}
+	req = append(req, h...)
+	req = append(req, 0x01, 0xBB) // 443
 	if _, err := c.Write(req); err != nil {
 		return nil, err
 	}
@@ -390,6 +400,11 @@ func dialUpstream(cfg Config, host string, port int) (net.Conn, error) {
 	_ = c.SetDeadline(time.Time{})
 	ok = true
 	return c, nil
+}
+
+func keyHash(value string) string {
+	sum := sha256.Sum256([]byte(value))
+	return hex.EncodeToString(sum[:])
 }
 
 func readAddr(br *bufio.Reader, atyp byte) (string, error) {
