@@ -2,8 +2,9 @@ package relay
 
 import (
 	"bufio"
-	"crypto/subtle"
+	"crypto/sha256"
 	"encoding/binary"
+	"encoding/hex"
 	"errors"
 	"io"
 	"net"
@@ -16,7 +17,6 @@ import (
 const (
 	socksVersion = 5
 
-	authNone     = 0x00
 	authUserPass = 0x02
 	authNoAccept = 0xff
 
@@ -63,32 +63,30 @@ func (r *Relay) handleSocks(c net.Conn) {
 	}
 
 	var client string
-	if r.cfg.SocksUser != "" {
-		if !hasByte(methods, authUserPass) {
-			_, _ = c.Write([]byte{socksVersion, authNoAccept})
-			return
-		}
-		if _, err := c.Write([]byte{socksVersion, authUserPass}); err != nil {
-			return
-		}
-		user, ok := readUserPass(br, r.cfg.SocksUser, r.cfg.SocksPass)
-		if !ok {
-			_, _ = c.Write([]byte{1, 1})
-			return
-		}
-		if _, err := c.Write([]byte{1, 0}); err != nil {
-			return
-		}
-		client = user
-	} else {
-		if !hasByte(methods, authNone) {
-			_, _ = c.Write([]byte{socksVersion, authNoAccept})
-			return
-		}
-		if _, err := c.Write([]byte{socksVersion, authNone}); err != nil {
-			return
-		}
+	// Доступ всегда по ключу: клиент присылает ключ в поле пароля,
+	// шлюз ищет его хеш среди ключей подключённых узлов.
+	if !hasByte(methods, authUserPass) {
+		_, _ = c.Write([]byte{socksVersion, authNoAccept})
+		return
 	}
+	if _, err := c.Write([]byte{socksVersion, authUserPass}); err != nil {
+		return
+	}
+	user, pass, ok := readCreds(br)
+	if !ok {
+		_, _ = c.Write([]byte{1, 1})
+		return
+	}
+	link, label, found := r.lookupKey(keyHash(pass))
+	if !found {
+		_, _ = c.Write([]byte{1, 1})
+		r.log.Printf("SOCKS: неизвестный ключ %s (логин %q) от %s", keyHash(pass), user, c.RemoteAddr())
+		return
+	}
+	if _, err := c.Write([]byte{1, 0}); err != nil {
+		return
+	}
+	client = label
 
 	req := make([]byte, 4)
 	if _, err := io.ReadFull(br, req); err != nil {
@@ -113,7 +111,7 @@ func (r *Relay) handleSocks(c net.Conn) {
 	}
 	port := int(binary.BigEndian.Uint16(portBuf))
 
-	st, err := r.open(protocol.OpenRequest{Host: host, Port: port, Client: client})
+	st, err := r.open(link, protocol.OpenRequest{Host: host, Port: port, Client: client})
 	if err != nil {
 		code := byte(repGeneralFailure)
 		var oe *protocol.OpenError
@@ -133,11 +131,7 @@ func (r *Relay) handleSocks(c net.Conn) {
 	protocol.Join(&protocol.BufConn{Conn: c, R: br}, st)
 }
 
-func (r *Relay) open(req protocol.OpenRequest) (net.Conn, error) {
-	link, err := r.pickLink()
-	if err != nil {
-		return nil, err
-	}
+func (r *Relay) open(link *agentLink, req protocol.OpenRequest) (net.Conn, error) {
 	st, err := link.sess.OpenStream()
 	if err != nil {
 		return nil, err
@@ -173,30 +167,33 @@ func (r *Relay) open(req protocol.OpenRequest) (net.Conn, error) {
 	return bc, nil
 }
 
-func readUserPass(br *bufio.Reader, wantUser, wantPass string) (string, bool) {
+func readCreds(br *bufio.Reader) (string, string, bool) {
 	hdr := make([]byte, 2)
 	if _, err := io.ReadFull(br, hdr); err != nil {
-		return "", false
+		return "", "", false
 	}
 	if hdr[0] != 1 {
-		return "", false
+		return "", "", false
 	}
 	user := make([]byte, int(hdr[1]))
 	if _, err := io.ReadFull(br, user); err != nil {
-		return "", false
+		return "", "", false
 	}
 	plen := make([]byte, 1)
 	if _, err := io.ReadFull(br, plen); err != nil {
-		return "", false
+		return "", "", false
 	}
 	pass := make([]byte, int(plen[0]))
 	if _, err := io.ReadFull(br, pass); err != nil {
-		return "", false
+		return "", "", false
 	}
+	return string(user), string(pass), true
+}
 
-	okUser := subtle.ConstantTimeCompare(user, []byte(wantUser)) == 1
-	okPass := subtle.ConstantTimeCompare(pass, []byte(wantPass)) == 1
-	return string(user), okUser && okPass
+// keyHash — тот же хеш, что присылает агент в списке ключей.
+func keyHash(value string) string {
+	sum := sha256.Sum256([]byte(value))
+	return hex.EncodeToString(sum[:])
 }
 
 func readAddr(br *bufio.Reader, atyp byte) (string, error) {

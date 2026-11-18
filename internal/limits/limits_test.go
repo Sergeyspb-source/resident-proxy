@@ -18,18 +18,21 @@ func TestDomainList(t *testing.T) {
 }
 
 func TestNormalize(t *testing.T) {
-	v := Normalize(Values{QuotaMB: -5, RateKBps: -1, Domains: "  "})
-	if v.QuotaMB != 0 || v.RateKBps != 0 || v.Domains != "" {
+	v := Normalize(Values{QuotaMB: -5, QuotaMonthMB: -7, RateKBps: -1, Domains: "  "})
+	if v.QuotaMB != 0 || v.QuotaMonthMB != 0 || v.RateKBps != 0 || v.Domains != "" {
 		t.Fatalf("негативные значения не обнулились: %+v", v)
 	}
 
-	v = Normalize(Values{QuotaMB: 2_000_000, RateKBps: 2_000_000})
-	if v.QuotaMB != 1_000_000 || v.RateKBps != 1_000_000 {
+	v = Normalize(Values{QuotaMB: 2_000_000, QuotaMonthMB: 40_000_000, RateKBps: 2_000_000})
+	if v.QuotaMB != 1_000_000 || v.QuotaMonthMB != 30_000_000 || v.RateKBps != 1_000_000 {
 		t.Fatalf("верхняя граница не применилась: %+v", v)
 	}
 
 	if got := (Values{QuotaMB: 2}).QuotaBytes(); got != 2*1024*1024 {
 		t.Fatalf("QuotaBytes = %d", got)
+	}
+	if got := (Values{QuotaMonthMB: 3}).QuotaMonthBytes(); got != 3*1024*1024 {
+		t.Fatalf("QuotaMonthBytes = %d", got)
 	}
 	if got := (Values{QuotaMB: 0}).QuotaBytes(); got != 0 {
 		t.Fatalf("нулевая квота дала %d", got)
@@ -39,9 +42,14 @@ func TestNormalize(t *testing.T) {
 func TestSaveLoad(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "agent-state.json")
 	st := State{
-		Values: Values{QuotaMB: 10, RateKBps: 20, Domains: "a.com"},
-		Used:   1234,
-		Day:    "2026-11-18",
+		Values: Values{QuotaMB: 10, QuotaMonthMB: 100, RateKBps: 20, Domains: "a.com"},
+		Keys: []AccessKey{
+			{ID: "1", Label: "Иван", Value: "abc"},
+		},
+		Used:      1234,
+		UsedMonth: 5678,
+		Day:       "2026-11-18",
+		Month:     "2026-11",
 	}
 	if err := Save(path, st); err != nil {
 		t.Fatal(err)
@@ -50,7 +58,7 @@ func TestSaveLoad(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got != st {
+	if !reflect.DeepEqual(got, st) {
 		t.Fatalf("Load = %+v, want %+v", got, st)
 	}
 }

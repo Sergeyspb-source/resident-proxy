@@ -3,3 +3,4 @@ bin/
 *.out
 *.pem
 pids.txt
+agent-state.json

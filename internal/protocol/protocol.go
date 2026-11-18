@@ -14,7 +14,7 @@ import (
 	"github.com/hashicorp/yamux"
 )
 
-const Version = "0.1.0"
+const Version = "0.2.0"
 
 // Коды ошибок совпадают с кодами SOCKS5 (RFC 1928), чтобы шлюз отдавал клиенту
 // корректный ответ без дополнительного маппинга.
@@ -32,7 +32,22 @@ type Hello struct {
 	Token   string `json:"token"`
 	Name    string `json:"name"`
 	Version string `json:"version"`
+	Keys    []Key  `json:"keys,omitempty"`
 }
+
+// Key — хеш ключа доступа. Сам ключ остаётся у владельца узла и не уходит на шлюз.
+type Key struct {
+	Label string `json:"label"`
+	Hash  string `json:"hash"`
+}
+
+// Control — служебное сообщение агента после подключения.
+type Control struct {
+	Type string `json:"type"`
+	Keys []Key  `json:"keys,omitempty"`
+}
+
+const ControlKeys = "keys"
 
 // Ack подтверждает регистрацию агента на шлюзе.
 type Ack struct {

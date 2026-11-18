@@ -1,4 +1,4 @@
-// Пакет limits хранит ограничения узла и израсходованный трафик.
+// Пакет limits хранит ограничения узла, ключи доступа и израсходованный трафик.
 // Настройки переживают перезапуск: файл лежит рядом с исполняемым файлом.
 package limits
 
@@ -9,15 +9,27 @@ import (
 )
 
 type Values struct {
-	QuotaMB  int64  `json:"quota_mb"`
-	RateKBps int64  `json:"rate_kbps"`
-	Domains  string `json:"domains"`
+	QuotaMB      int64  `json:"quota_mb"`
+	QuotaMonthMB int64  `json:"quota_month_mb"`
+	RateKBps     int64  `json:"rate_kbps"`
+	Domains      string `json:"domains"`
+}
+
+// AccessKey — ключ, который владелец узла выдаёт коллеге.
+// Хранится целиком, чтобы владелец мог показать его повторно.
+type AccessKey struct {
+	ID    string `json:"id"`
+	Label string `json:"label"`
+	Value string `json:"value"`
 }
 
 type State struct {
 	Values
-	Used int64  `json:"used_bytes"`
-	Day  string `json:"day"`
+	Keys      []AccessKey `json:"keys,omitempty"`
+	Used      int64       `json:"used_bytes"`
+	UsedMonth int64       `json:"used_month_bytes"`
+	Day       string      `json:"day"`
+	Month     string      `json:"month"`
 }
 
 func Normalize(v Values) Values {
@@ -26,6 +38,12 @@ func Normalize(v Values) Values {
 	}
 	if v.QuotaMB > 1_000_000 {
 		v.QuotaMB = 1_000_000
+	}
+	if v.QuotaMonthMB < 0 {
+		v.QuotaMonthMB = 0
+	}
+	if v.QuotaMonthMB > 30_000_000 {
+		v.QuotaMonthMB = 30_000_000
 	}
 	if v.RateKBps < 0 {
 		v.RateKBps = 0
@@ -42,6 +60,13 @@ func (v Values) QuotaBytes() int64 {
 		return 0
 	}
 	return v.QuotaMB * 1024 * 1024
+}
+
+func (v Values) QuotaMonthBytes() int64 {
+	if v.QuotaMonthMB <= 0 {
+		return 0
+	}
+	return v.QuotaMonthMB * 1024 * 1024
 }
 
 // DomainList нормализует список: нижний регистр, без "*." и точек по краям.
@@ -76,6 +101,9 @@ func Load(path string) (State, error) {
 	st.Values = Normalize(st.Values)
 	if st.Used < 0 {
 		st.Used = 0
+	}
+	if st.UsedMonth < 0 {
+		st.UsedMonth = 0
 	}
 	return st, nil
 }

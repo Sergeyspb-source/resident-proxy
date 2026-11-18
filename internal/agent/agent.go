@@ -4,15 +4,18 @@ package agent
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
 	"crypto/tls"
+	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log"
 	"net"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"runtime"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -21,6 +24,7 @@ import (
 	"github.com/hashicorp/yamux"
 	"golang.org/x/time/rate"
 
+	"exitnode/internal/desktop"
 	"exitnode/internal/limits"
 	"exitnode/internal/monitor"
 	"exitnode/internal/protocol"
@@ -37,12 +41,13 @@ type Config struct {
 	UIAddr      string
 	AllowPorts  string
 	MaxSessions int
-	OpenBrowser bool
+	TrayMode    bool
 	Insecure    bool
 	NoTLS       bool
 	QuotaMB     int64
 	RateKBps    int64
 	Domains     string
+	OnReady     func(url string)
 }
 
 type Agent struct {
@@ -59,10 +64,15 @@ type Agent struct {
 	mu   sync.Mutex
 	sess *yamux.Session
 
+	keysMu sync.Mutex
+	keys   []limits.AccessKey
+
 	limMu       sync.Mutex
 	limits      limits.Values
 	used        int64
 	usedDay     string
+	usedMonth   int64
+	usedMonthAt string
 	limPath     string
 	limDirty    bool
 	quotaLogged bool
@@ -103,8 +113,13 @@ func New(cfg Config, logger *log.Logger) (*Agent, error) {
 		if st, err := limits.Load(a.limPath); err == nil {
 			a.limits = st.Values
 			a.used = st.Used
+			a.usedMonth = st.UsedMonth
+			a.keys = st.Keys
 			if st.Day != "" {
 				a.usedDay = st.Day
+			}
+			if st.Month != "" {
+				a.usedMonthAt = st.Month
 			}
 		}
 	}
@@ -137,8 +152,8 @@ func (a *Agent) Run() error {
 
 	onReady := func(url string) {
 		a.log.Printf("панель: %s", url)
-		if a.cfg.OpenBrowser {
-			openBrowser(url)
+		if a.cfg.OnReady != nil {
+			a.cfg.OnReady(url)
 		}
 	}
 	return ui.Serve(a.cfg.UIAddr, a.reg, a, a.sys, a.log, onReady)
@@ -207,6 +222,7 @@ func (a *Agent) connectOnce() error {
 		Token:   a.cfg.Token,
 		Name:    a.cfg.Name,
 		Version: protocol.Version,
+		Keys:    a.keyHashes(),
 	}); err != nil {
 		return err
 	}
@@ -407,29 +423,153 @@ func (a *Agent) SetEnabled(v bool) { a.enabled.Store(v) }
 
 func (a *Agent) KillAll() { a.reg.KillAll() }
 
-// Limits отдаёт панели текущие настройки и расход за сегодня.
+// Keys отдаёт панели список ключей вместе со значениями:
+// владелец должен иметь возможность передать ключ повторно.
+func (a *Agent) Keys() []ui.KeyView {
+	a.keysMu.Lock()
+	defer a.keysMu.Unlock()
+	out := make([]ui.KeyView, 0, len(a.keys))
+	for _, k := range a.keys {
+		out = append(out, ui.KeyView{ID: k.ID, Label: k.Label, Value: k.Value})
+	}
+	return out
+}
+
+// AddKey создаёт ключ доступа и сразу сообщает его шлюзу.
+func (a *Agent) AddKey(label string) (ui.KeyView, error) {
+	label = strings.TrimSpace(label)
+	if label == "" {
+		return ui.KeyView{}, errors.New("нужна подпись, чтобы отличать коллег")
+	}
+	if len(label) > 40 {
+		label = label[:40]
+	}
+
+	buf := make([]byte, 32)
+	if _, err := rand.Read(buf); err != nil {
+		return ui.KeyView{}, err
+	}
+	value := base64.RawURLEncoding.EncodeToString(buf)
+
+	a.keysMu.Lock()
+	if len(a.keys) >= 100 {
+		a.keysMu.Unlock()
+		return ui.KeyView{}, errors.New("слишком много ключей")
+	}
+	key := limits.AccessKey{ID: value[:10], Label: label, Value: value}
+	a.keys = append(a.keys, key)
+	a.keysMu.Unlock()
+
+	a.saveState()
+	a.notifyKeys()
+	a.log.Printf("добавлен ключ доступа: %s", label)
+	return ui.KeyView{ID: key.ID, Label: key.Label, Value: key.Value}, nil
+}
+
+// RemoveKey отзывает ключ: шлюз перестаёт пускать его владельца.
+func (a *Agent) RemoveKey(id string) error {
+	a.keysMu.Lock()
+	found := false
+	out := a.keys[:0]
+	for _, k := range a.keys {
+		if k.ID == id {
+			found = true
+			continue
+		}
+		out = append(out, k)
+	}
+	a.keys = out
+	a.keysMu.Unlock()
+
+	if !found {
+		return errors.New("ключ не найден")
+	}
+	a.saveState()
+	a.notifyKeys()
+	a.log.Printf("ключ отозван: %s", id)
+	return nil
+}
+
+func (a *Agent) keyHashes() []protocol.Key {
+	a.keysMu.Lock()
+	defer a.keysMu.Unlock()
+	out := make([]protocol.Key, 0, len(a.keys))
+	for _, k := range a.keys {
+		out = append(out, protocol.Key{Label: k.Label, Hash: keyHash(k.Value)})
+	}
+	return out
+}
+
+func keyHash(value string) string {
+	sum := sha256.Sum256([]byte(value))
+	return hex.EncodeToString(sum[:])
+}
+
+func (a *Agent) saveState() {
+	a.limMu.Lock()
+	a.limDirty = true
+	a.limMu.Unlock()
+	a.flushLimits()
+}
+
+// notifyKeys отправляет шлюзу актуальный список хешей без разрыва туннеля.
+func (a *Agent) notifyKeys() {
+	sess := a.session()
+	if sess == nil {
+		return
+	}
+	st, err := sess.OpenStream()
+	if err != nil {
+		return
+	}
+	defer st.Close()
+	_ = st.SetWriteDeadline(time.Now().Add(5 * time.Second))
+	if err := protocol.WriteJSON(st, protocol.Control{Type: protocol.ControlKeys, Keys: a.keyHashes()}); err != nil {
+		return
+	}
+}
+
+func (a *Agent) session() *yamux.Session {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.sess == nil || a.sess.IsClosed() {
+		return nil
+	}
+	return a.sess
+}
+
+// Autostart показывает и меняет запись в автозагрузке Windows.
+func (a *Agent) Autostart() bool { return desktop.AutostartEnabled() }
+
+func (a *Agent) SetAutostart(v bool) error { return desktop.SetAutostart(v) }
+
+// Limits отдаёт панели текущие настройки и расход.
 func (a *Agent) Limits() ui.LimitsView {
 	a.limMu.Lock()
 	defer a.limMu.Unlock()
 	a.rollLocked()
 	return ui.LimitsView{
-		QuotaMB:    a.limits.QuotaMB,
-		RateKBps:   a.limits.RateKBps,
-		Domains:    a.limits.Domains,
-		UsedBytes:  a.used,
-		QuotaBytes: a.limits.QuotaBytes(),
+		QuotaMB:         a.limits.QuotaMB,
+		QuotaMonthMB:    a.limits.QuotaMonthMB,
+		RateKBps:        a.limits.RateKBps,
+		Domains:         a.limits.Domains,
+		UsedBytes:       a.used,
+		QuotaBytes:      a.limits.QuotaBytes(),
+		UsedMonthBytes:  a.usedMonth,
+		QuotaMonthBytes: a.limits.QuotaMonthBytes(),
 	}
 }
 
 // SetLimits применяет настройки сразу, без перезапуска, и сохраняет их на диск.
 func (a *Agent) SetLimits(v ui.LimitsView) error {
-	if v.QuotaMB < 0 || v.RateKBps < 0 {
+	if v.QuotaMB < 0 || v.QuotaMonthMB < 0 || v.RateKBps < 0 {
 		return errors.New("значения не могут быть отрицательными")
 	}
 	norm := limits.Normalize(limits.Values{
-		QuotaMB:  v.QuotaMB,
-		RateKBps: v.RateKBps,
-		Domains:  v.Domains,
+		QuotaMB:      v.QuotaMB,
+		QuotaMonthMB: v.QuotaMonthMB,
+		RateKBps:     v.RateKBps,
+		Domains:      v.Domains,
 	})
 
 	a.limMu.Lock()
@@ -437,15 +577,15 @@ func (a *Agent) SetLimits(v ui.LimitsView) error {
 	a.quotaLogged = false
 	a.applyLimitsLocked()
 	a.limDirty = true
-	over := norm.QuotaBytes() > 0 && a.used >= norm.QuotaBytes()
+	over := a.overQuotaLocked()
 	a.limMu.Unlock()
 
 	a.flushLimits()
 	if over {
 		a.reg.KillAll()
 	}
-	a.log.Printf("ограничения обновлены: квота %d МБ, скорость %d КБ/с, доменов: %d",
-		norm.QuotaMB, norm.RateKBps, len(limits.DomainList(norm.Domains)))
+	a.log.Printf("ограничения обновлены: квота %d МБ/сутки и %d МБ/месяц, скорость %d КБ/с, доменов: %d",
+		norm.QuotaMB, norm.QuotaMonthMB, norm.RateKBps, len(limits.DomainList(norm.Domains)))
 	return nil
 }
 
@@ -463,8 +603,8 @@ func (a *Agent) addTraffic(n int64) {
 	a.limMu.Lock()
 	a.rollLocked()
 	a.used += n
-	quota := a.limits.QuotaBytes()
-	over := quota > 0 && a.used >= quota && !a.quotaLogged
+	a.usedMonth += n
+	over := a.overQuotaLocked() && !a.quotaLogged
 	if over {
 		a.quotaLogged = true
 	}
@@ -472,7 +612,7 @@ func (a *Agent) addTraffic(n int64) {
 	a.limMu.Unlock()
 
 	if over {
-		a.log.Printf("суточная квота исчерпана, все подключения остановлены")
+		a.log.Printf("квота исчерпана, все подключения остановлены")
 		a.reg.KillAll()
 		// GPT: при достижении квоты сразу пишем состояние на диск,
 		// чтобы перезапуск не обнулил счётчик.
@@ -484,20 +624,35 @@ func (a *Agent) overQuota() bool {
 	a.limMu.Lock()
 	defer a.limMu.Unlock()
 	a.rollLocked()
-	q := a.limits.QuotaBytes()
-	return q > 0 && a.used >= q
+	return a.overQuotaLocked()
 }
 
-// rollLocked сбрасывает расход при смене суток.
+func (a *Agent) overQuotaLocked() bool {
+	qDay := a.limits.QuotaBytes()
+	qMonth := a.limits.QuotaMonthBytes()
+	overDay := qDay > 0 && a.used >= qDay
+	overMonth := qMonth > 0 && a.usedMonth >= qMonth
+	return overDay || overMonth
+}
+
+// rollLocked сбрасывает расход при смене суток и месяца.
 func (a *Agent) rollLocked() {
-	today := time.Now().Format(dayLayout)
-	if a.usedDay == today {
-		return
+	now := time.Now()
+	today := now.Format(dayLayout)
+	month := now.Format("2006-01")
+
+	if a.usedDay != today {
+		a.usedDay = today
+		a.used = 0
+		a.quotaLogged = false
+		a.limDirty = true
 	}
-	a.usedDay = today
-	a.used = 0
-	a.quotaLogged = false
-	a.limDirty = true
+	if a.usedMonthAt != month {
+		a.usedMonthAt = month
+		a.usedMonth = 0
+		a.quotaLogged = false
+		a.limDirty = true
+	}
 }
 
 func (a *Agent) applyLimitsLocked() {
@@ -526,7 +681,18 @@ func (a *Agent) flushLimits() {
 		a.limMu.Unlock()
 		return
 	}
-	st := limits.State{Values: a.limits, Used: a.used, Day: a.usedDay}
+	a.keysMu.Lock()
+	keys := append([]limits.AccessKey(nil), a.keys...)
+	a.keysMu.Unlock()
+
+	st := limits.State{
+		Values:    a.limits,
+		Keys:      keys,
+		Used:      a.used,
+		UsedMonth: a.usedMonth,
+		Day:       a.usedDay,
+		Month:     a.usedMonthAt,
+	}
 	a.limDirty = false
 	a.limMu.Unlock()
 
@@ -536,19 +702,6 @@ func (a *Agent) flushLimits() {
 		a.limDirty = true
 		a.limMu.Unlock()
 	}
-}
-
-func openBrowser(url string) {
-	var cmd *exec.Cmd
-	switch runtime.GOOS {
-	case "windows":
-		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", url)
-	case "darwin":
-		cmd = exec.Command("open", url)
-	default:
-		cmd = exec.Command("xdg-open", url)
-	}
-	_ = cmd.Start()
 }
 
 func humanBytes(n uint64) string {

@@ -25,13 +25,23 @@ type Info struct {
 	MaxSessions int
 }
 
-// LimitsView — ограничения узла и расход за сегодня.
+// LimitsView — ограничения узла и расход за сегодня и за месяц.
 type LimitsView struct {
-	QuotaMB    int64  `json:"quota_mb"`
-	RateKBps   int64  `json:"rate_kbps"`
-	Domains    string `json:"domains"`
-	UsedBytes  int64  `json:"used_bytes"`
-	QuotaBytes int64  `json:"quota_bytes"`
+	QuotaMB         int64  `json:"quota_mb"`
+	QuotaMonthMB    int64  `json:"quota_month_mb"`
+	RateKBps        int64  `json:"rate_kbps"`
+	Domains         string `json:"domains"`
+	UsedBytes       int64  `json:"used_bytes"`
+	QuotaBytes      int64  `json:"quota_bytes"`
+	UsedMonthBytes  int64  `json:"used_month_bytes"`
+	QuotaMonthBytes int64  `json:"quota_month_bytes"`
+}
+
+// KeyView — ключ доступа, который владелец узла передаёт коллеге.
+type KeyView struct {
+	ID    string `json:"id"`
+	Label string `json:"label"`
+	Value string `json:"value"`
 }
 
 // Controller — действия, доступные с панели.
@@ -41,6 +51,11 @@ type Controller interface {
 	KillAll()
 	Limits() LimitsView
 	SetLimits(LimitsView) error
+	Keys() []KeyView
+	AddKey(string) (KeyView, error)
+	RemoveKey(string) error
+	Autostart() bool
+	SetAutostart(bool) error
 }
 
 type state struct {
@@ -52,6 +67,8 @@ type state struct {
 	MaxSessions int                       `json:"max_sessions"`
 	Limits      LimitsView                `json:"limits"`
 	Quota       bool                      `json:"quota_exceeded"`
+	Keys        []KeyView                 `json:"keys"`
+	Autostart   bool                      `json:"autostart"`
 	Sessions    []monitor.SessionSnapshot `json:"sessions"`
 	InRate      float64                   `json:"in_rate"`
 	OutRate     float64                   `json:"out_rate"`
@@ -87,6 +104,9 @@ func Serve(addr string, reg *monitor.Registry, ctrl Controller, sys *monitor.Sys
 	mux.HandleFunc("/api/toggle", h.toggle)
 	mux.HandleFunc("/api/kill", h.kill)
 	mux.HandleFunc("/api/limits", h.setLimits)
+	mux.HandleFunc("/api/keys/add", h.addKey)
+	mux.HandleFunc("/api/keys/remove", h.removeKey)
+	mux.HandleFunc("/api/autostart", h.setAutostart)
 
 	if onReady != nil {
 		onReady("http://" + displayAddr(ln.Addr().String()) + "/")
@@ -119,6 +139,8 @@ func (h *handler) getState(w http.ResponseWriter, r *http.Request) {
 	snap := h.reg.Snapshot()
 	sys := h.sys.Snapshot()
 	lim := h.ctrl.Limits()
+	quotaHit := (lim.QuotaBytes > 0 && lim.UsedBytes >= lim.QuotaBytes) ||
+		(lim.QuotaMonthBytes > 0 && lim.UsedMonthBytes >= lim.QuotaMonthBytes)
 
 	resp := state{
 		Name:        info.Name,
@@ -128,7 +150,9 @@ func (h *handler) getState(w http.ResponseWriter, r *http.Request) {
 		Uptime:      int64(time.Since(info.Since).Seconds()),
 		MaxSessions: info.MaxSessions,
 		Limits:      lim,
-		Quota:       lim.QuotaBytes > 0 && lim.UsedBytes >= lim.QuotaBytes,
+		Quota:       quotaHit,
+		Keys:        h.ctrl.Keys(),
+		Autostart:   h.ctrl.Autostart(),
 		Sessions:    snap.Sessions,
 		InRate:      snap.InRate,
 		OutRate:     snap.OutRate,
@@ -187,6 +211,62 @@ func (h *handler) setLimits(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.ctrl.SetLimits(body); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	_, _ = w.Write([]byte(`{"ok":true}`))
+}
+
+func (h *handler) addKey(w http.ResponseWriter, r *http.Request) {
+	if !checkPost(w, r) {
+		return
+	}
+	var body struct {
+		Label string `json:"label"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&body); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	key, err := h.ctrl.AddKey(body.Label)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "key": key})
+}
+
+func (h *handler) removeKey(w http.ResponseWriter, r *http.Request) {
+	if !checkPost(w, r) {
+		return
+	}
+	var body struct {
+		ID string `json:"id"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&body); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	if err := h.ctrl.RemoveKey(body.ID); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	_, _ = w.Write([]byte(`{"ok":true}`))
+}
+
+func (h *handler) setAutostart(w http.ResponseWriter, r *http.Request) {
+	if !checkPost(w, r) {
+		return
+	}
+	var body struct {
+		Enabled bool `json:"enabled"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&body); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	if err := h.ctrl.SetAutostart(body.Enabled); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
