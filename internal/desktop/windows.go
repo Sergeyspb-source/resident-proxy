@@ -82,7 +82,7 @@ func OpenWindow(url string) {
 		if _, err := os.Stat(path); err != nil {
 			continue
 		}
-		cmd := exec.Command(path, "--app="+url, "--window-size=1120,900")
+		cmd := exec.Command(path, "--app="+url, "--window-size=720,660")
 		if err := cmd.Start(); err == nil {
 			log.Printf("окно открыто через %s", path)
 			return
