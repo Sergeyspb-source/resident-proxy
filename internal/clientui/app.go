@@ -5,6 +5,7 @@ import (
 	_ "embed"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"net"
 	"net/http"
@@ -87,8 +88,13 @@ func (a *App) Connect(server, key string) error {
 		return errors.New("нужны адрес шлюза и ключ")
 	}
 
+	listen, err := freeListen()
+	if err != nil {
+		a.setError(err.Error())
+		return err
+	}
 	cfg := client.Config{
-		Listen: "127.0.0.1:1080",
+		Listen: listen,
 		Server: server,
 		Key:    key,
 		TLS:    true,
@@ -150,6 +156,21 @@ func (a *App) setError(msg string) {
 	a.mu.Lock()
 	a.last = msg
 	a.mu.Unlock()
+}
+
+// freeListen ищет свободный локальный порт, начиная с 1080.
+// GPT: Xray и другие клиенты часто занимают 1080, поэтому не падаем,
+// а берём следующий свободный и показываем его в окне.
+func freeListen() (string, error) {
+	for p := 1080; p <= 1099; p++ {
+		addr := fmt.Sprintf("127.0.0.1:%d", p)
+		ln, err := net.Listen("tcp", addr)
+		if err == nil {
+			_ = ln.Close()
+			return addr, nil
+		}
+	}
+	return "", errors.New("нет свободного порта в диапазоне 1080–1099")
 }
 
 type stateView struct {

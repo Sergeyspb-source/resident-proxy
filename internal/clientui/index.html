@@ -110,8 +110,8 @@
 
   <div class="card">
     <div class="label">Браузер</div>
-    <div class="note">Пока клиент подключён, браузер ходит через локальный прокси. Для Chrome или Edge запустите отдельное окно:</div>
-    <code class="cmd">chrome.exe --proxy-server="socks5://127.0.0.1:1080" --force-webrtc-ip-handling-policy=disable_non_proxied_udp</code>
+    <div class="note">Пока клиент подключён, браузер ходит через локальный прокси. Если порт 1080 занят (например, Xray), клиент берёт следующий свободный и показывает его выше.</div>
+    <code id="cmd" class="cmd">chrome.exe --proxy-server="socks5://127.0.0.1:1080" --force-webrtc-ip-handling-policy=disable_non_proxied_udp</code>
     <div class="note">Флаг WebRTC обязателен: без него браузер может выдать реальный IP в обход прокси.</div>
   </div>
 
@@ -166,6 +166,8 @@ async function poll() {
   $("dot").className = "dot " + (s.running ? "on" : "off");
   $("statusText").textContent = s.running ? "подключено" : "не подключён";
   $("listen").textContent = s.running ? s.listen : "—";
+  const port = (s.listen || "127.0.0.1:1080").split(":").pop() || "1080";
+  $("cmd").textContent = 'chrome.exe --proxy-server="socks5://127.0.0.1:' + port + '" --force-webrtc-ip-handling-policy=disable_non_proxied_udp';
   $("in").textContent = fmt(s.in);
   $("out").textContent = fmt(s.out);
   $("connect").hidden = s.running;
