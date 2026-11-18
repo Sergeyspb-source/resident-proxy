@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -82,7 +83,15 @@ func OpenWindow(url string) {
 		if _, err := os.Stat(path); err != nil {
 			continue
 		}
-		cmd := exec.Command(path, "--app="+url, "--window-size=720,660")
+		// GPT: Edge/Chrome восстанавливают размер прошлого окна и игнорируют
+		// --window-size. Отдельный профиль даёт предсказуемый первый размер
+		// и не смешивает панель с личным профилем браузера.
+		args := []string{"--app=" + url, "--window-size=720,660"}
+		if dir, err := os.UserCacheDir(); err == nil {
+			profile := filepath.Join(dir, "exitnode", "ui-profile")
+			args = append(args, "--user-data-dir="+profile, "--no-first-run", "--no-default-browser-check")
+		}
+		cmd := exec.Command(path, args...)
 		if err := cmd.Start(); err == nil {
 			log.Printf("окно открыто через %s", path)
 			return
