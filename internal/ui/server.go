@@ -265,6 +265,10 @@ func (h *handler) addKey(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	// Новый ключ показываем целиком один раз: в общем списке он маскирован.
+	if value, err := h.ctrl.KeyValue(key.ID); err == nil {
+		key.Value = value
+	}
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "key": key})
 }

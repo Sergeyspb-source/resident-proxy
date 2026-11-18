@@ -767,18 +767,23 @@ func (a *Agent) notifyKeys() {
 	}
 	sess := a.session()
 	if sess == nil {
+		a.log.Printf("ключи: туннель не открыт")
 		return
 	}
 	st, err := sess.OpenStream()
 	if err != nil {
+		a.log.Printf("ключи: не открыть поток: %v", err)
 		return
 	}
 	defer st.Close()
 	_ = st.SetWriteDeadline(time.Now().Add(5 * time.Second))
-	if err := protocol.WriteJSON(st, protocol.Control{Type: protocol.ControlKeys, Keys: a.keyHashes()}); err != nil {
+	keys := a.keyHashes()
+	if err := protocol.WriteJSON(st, protocol.Control{Type: protocol.ControlKeys, Keys: keys}); err != nil {
+		a.log.Printf("ключи: не отправить: %v", err)
 		return
 	}
 	a.keysDirty.Store(false)
+	a.log.Printf("ключи отправлены: %d", len(keys))
 }
 
 func (a *Agent) flushLimits() {
