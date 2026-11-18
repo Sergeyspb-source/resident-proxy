@@ -25,11 +25,22 @@ type Info struct {
 	MaxSessions int
 }
 
+// LimitsView — ограничения узла и расход за сегодня.
+type LimitsView struct {
+	QuotaMB    int64  `json:"quota_mb"`
+	RateKBps   int64  `json:"rate_kbps"`
+	Domains    string `json:"domains"`
+	UsedBytes  int64  `json:"used_bytes"`
+	QuotaBytes int64  `json:"quota_bytes"`
+}
+
 // Controller — действия, доступные с панели.
 type Controller interface {
 	Info() Info
 	SetEnabled(bool)
 	KillAll()
+	Limits() LimitsView
+	SetLimits(LimitsView) error
 }
 
 type state struct {
@@ -39,6 +50,8 @@ type state struct {
 	Enabled     bool                      `json:"enabled"`
 	Uptime      int64                     `json:"uptime"`
 	MaxSessions int                       `json:"max_sessions"`
+	Limits      LimitsView                `json:"limits"`
+	Quota       bool                      `json:"quota_exceeded"`
 	Sessions    []monitor.SessionSnapshot `json:"sessions"`
 	InRate      float64                   `json:"in_rate"`
 	OutRate     float64                   `json:"out_rate"`
@@ -73,6 +86,7 @@ func Serve(addr string, reg *monitor.Registry, ctrl Controller, sys *monitor.Sys
 	mux.HandleFunc("/api/state", h.getState)
 	mux.HandleFunc("/api/toggle", h.toggle)
 	mux.HandleFunc("/api/kill", h.kill)
+	mux.HandleFunc("/api/limits", h.setLimits)
 
 	if onReady != nil {
 		onReady("http://" + displayAddr(ln.Addr().String()) + "/")
@@ -104,6 +118,7 @@ func (h *handler) getState(w http.ResponseWriter, r *http.Request) {
 	info := h.ctrl.Info()
 	snap := h.reg.Snapshot()
 	sys := h.sys.Snapshot()
+	lim := h.ctrl.Limits()
 
 	resp := state{
 		Name:        info.Name,
@@ -112,6 +127,8 @@ func (h *handler) getState(w http.ResponseWriter, r *http.Request) {
 		Enabled:     info.Enabled,
 		Uptime:      int64(time.Since(info.Since).Seconds()),
 		MaxSessions: info.MaxSessions,
+		Limits:      lim,
+		Quota:       lim.QuotaBytes > 0 && lim.UsedBytes >= lim.QuotaBytes,
 		Sessions:    snap.Sessions,
 		InRate:      snap.InRate,
 		OutRate:     snap.OutRate,
@@ -157,6 +174,22 @@ func (h *handler) kill(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.ctrl.KillAll()
+	_, _ = w.Write([]byte(`{"ok":true}`))
+}
+
+func (h *handler) setLimits(w http.ResponseWriter, r *http.Request) {
+	if !checkPost(w, r) {
+		return
+	}
+	var body LimitsView
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&body); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	if err := h.ctrl.SetLimits(body); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	_, _ = w.Write([]byte(`{"ok":true}`))
 }
 

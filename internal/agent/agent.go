@@ -11,6 +11,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -18,11 +19,15 @@ import (
 	"time"
 
 	"github.com/hashicorp/yamux"
+	"golang.org/x/time/rate"
 
+	"exitnode/internal/limits"
 	"exitnode/internal/monitor"
 	"exitnode/internal/protocol"
 	"exitnode/internal/ui"
 )
+
+const dayLayout = "2006-01-02"
 
 type Config struct {
 	RelayAddr   string
@@ -35,6 +40,9 @@ type Config struct {
 	OpenBrowser bool
 	Insecure    bool
 	NoTLS       bool
+	QuotaMB     int64
+	RateKBps    int64
+	Domains     string
 }
 
 type Agent struct {
@@ -46,9 +54,19 @@ type Agent struct {
 	started time.Time
 
 	enabled atomic.Bool
+	limiter *rate.Limiter
 
 	mu   sync.Mutex
 	sess *yamux.Session
+
+	limMu       sync.Mutex
+	limits      limits.Values
+	used        int64
+	usedDay     string
+	limPath     string
+	limDirty    bool
+	quotaLogged bool
+	ticks       int
 }
 
 func New(cfg Config, logger *log.Logger) (*Agent, error) {
@@ -63,14 +81,52 @@ func New(cfg Config, logger *log.Logger) (*Agent, error) {
 		host, _ := os.Hostname()
 		cfg.Name = host
 	}
-	return &Agent{
+
+	a := &Agent{
 		cfg:     cfg,
 		log:     logger,
 		guard:   guard,
 		reg:     monitor.NewRegistry(),
 		sys:     monitor.NewSystem(),
 		started: time.Now(),
-	}, nil
+		limiter: rate.NewLimiter(rate.Inf, 64<<10),
+		limits: limits.Normalize(limits.Values{
+			QuotaMB:  cfg.QuotaMB,
+			RateKBps: cfg.RateKBps,
+			Domains:  cfg.Domains,
+		}),
+		usedDay: time.Now().Format(dayLayout),
+		limPath: statePath(),
+	}
+
+	if a.limPath != "" {
+		if st, err := limits.Load(a.limPath); err == nil {
+			a.limits = st.Values
+			a.used = st.Used
+			if st.Day != "" {
+				a.usedDay = st.Day
+			}
+		}
+	}
+
+	a.limMu.Lock()
+	a.rollLocked()
+	a.applyLimitsLocked()
+	a.limMu.Unlock()
+
+	a.log.Printf("ограничения: квота %d МБ/сутки, скорость %d КБ/с, доменов в списке: %d",
+		a.limits.QuotaMB, a.limits.RateKBps, len(limits.DomainList(a.limits.Domains)))
+
+	return a, nil
+}
+
+// statePath хранит настройки рядом с exe, чтобы они переживали перезапуск.
+func statePath() string {
+	exe, err := os.Executable()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(filepath.Dir(exe), "agent-state.json")
 }
 
 func (a *Agent) Run() error {
@@ -94,6 +150,10 @@ func (a *Agent) tickLoop() {
 	for range tk.C {
 		a.reg.Tick()
 		a.sys.Sample()
+		a.ticks++
+		if a.ticks%5 == 0 {
+			a.flushLimits()
+		}
 	}
 }
 
@@ -216,6 +276,14 @@ func (a *Agent) handleStream(st *yamux.Stream) {
 		st.Close()
 		return
 	}
+	if a.overQuota() {
+		_ = protocol.WriteJSON(bc, protocol.Reply{
+			Code:  protocol.CodeNotAllowed,
+			Error: "суточная квота трафика исчерпана",
+		})
+		st.Close()
+		return
+	}
 	if a.reg.Count() >= a.cfg.MaxSessions {
 		_ = protocol.WriteJSON(bc, protocol.Reply{
 			Code:  protocol.CodeNotAllowed,
@@ -263,9 +331,16 @@ func (a *Agent) handleStream(st *yamux.Stream) {
 	defer a.reg.Remove(sess.ID)
 
 	metered := &meterConn{
-		Conn:    bc,
-		onRead:  sess.AddIn,
-		onWrite: sess.AddOut,
+		Conn: bc,
+		onRead: func(n int64) {
+			sess.AddIn(n)
+			a.addTraffic(n)
+		},
+		onWrite: func(n int64) {
+			sess.AddOut(n)
+			a.addTraffic(n)
+		},
+		throttle: a.throttle,
 	}
 
 	a.log.Printf("сессия #%d: %s:%d", sess.ID, req.Host, req.Port)
@@ -285,22 +360,30 @@ func dialCode(err error) int {
 	}
 }
 
-// meterConn считает байты в момент передачи, чтобы скорость обновлялась вживую.
+// meterConn считает байты в момент передачи, чтобы скорость обновлялась вживую,
+// и попутно тормозит поток до заданного лимита.
 type meterConn struct {
 	net.Conn
-	onRead  func(int64)
-	onWrite func(int64)
+	onRead   func(int64)
+	onWrite  func(int64)
+	throttle func(int)
 }
 
 func (m *meterConn) Read(p []byte) (int, error) {
 	n, err := m.Conn.Read(p)
 	if n > 0 {
 		m.onRead(int64(n))
+		if m.throttle != nil {
+			m.throttle(n)
+		}
 	}
 	return n, err
 }
 
 func (m *meterConn) Write(p []byte) (int, error) {
+	if len(p) > 0 && m.throttle != nil {
+		m.throttle(len(p))
+	}
 	n, err := m.Conn.Write(p)
 	if n > 0 {
 		m.onWrite(int64(n))
@@ -323,6 +406,137 @@ func (a *Agent) Info() ui.Info {
 func (a *Agent) SetEnabled(v bool) { a.enabled.Store(v) }
 
 func (a *Agent) KillAll() { a.reg.KillAll() }
+
+// Limits отдаёт панели текущие настройки и расход за сегодня.
+func (a *Agent) Limits() ui.LimitsView {
+	a.limMu.Lock()
+	defer a.limMu.Unlock()
+	a.rollLocked()
+	return ui.LimitsView{
+		QuotaMB:    a.limits.QuotaMB,
+		RateKBps:   a.limits.RateKBps,
+		Domains:    a.limits.Domains,
+		UsedBytes:  a.used,
+		QuotaBytes: a.limits.QuotaBytes(),
+	}
+}
+
+// SetLimits применяет настройки сразу, без перезапуска, и сохраняет их на диск.
+func (a *Agent) SetLimits(v ui.LimitsView) error {
+	if v.QuotaMB < 0 || v.RateKBps < 0 {
+		return errors.New("значения не могут быть отрицательными")
+	}
+	norm := limits.Normalize(limits.Values{
+		QuotaMB:  v.QuotaMB,
+		RateKBps: v.RateKBps,
+		Domains:  v.Domains,
+	})
+
+	a.limMu.Lock()
+	a.limits = norm
+	a.quotaLogged = false
+	a.applyLimitsLocked()
+	a.limDirty = true
+	over := norm.QuotaBytes() > 0 && a.used >= norm.QuotaBytes()
+	a.limMu.Unlock()
+
+	a.flushLimits()
+	if over {
+		a.reg.KillAll()
+	}
+	a.log.Printf("ограничения обновлены: квота %d МБ, скорость %d КБ/с, доменов: %d",
+		norm.QuotaMB, norm.RateKBps, len(limits.DomainList(norm.Domains)))
+	return nil
+}
+
+func (a *Agent) throttle(n int) {
+	if n <= 0 {
+		return
+	}
+	_ = a.limiter.WaitN(context.Background(), n)
+}
+
+func (a *Agent) addTraffic(n int64) {
+	if n <= 0 {
+		return
+	}
+	a.limMu.Lock()
+	a.rollLocked()
+	a.used += n
+	quota := a.limits.QuotaBytes()
+	over := quota > 0 && a.used >= quota && !a.quotaLogged
+	if over {
+		a.quotaLogged = true
+	}
+	a.limDirty = true
+	a.limMu.Unlock()
+
+	if over {
+		a.log.Printf("суточная квота исчерпана, все подключения остановлены")
+		a.reg.KillAll()
+		// GPT: при достижении квоты сразу пишем состояние на диск,
+		// чтобы перезапуск не обнулил счётчик.
+		a.flushLimits()
+	}
+}
+
+func (a *Agent) overQuota() bool {
+	a.limMu.Lock()
+	defer a.limMu.Unlock()
+	a.rollLocked()
+	q := a.limits.QuotaBytes()
+	return q > 0 && a.used >= q
+}
+
+// rollLocked сбрасывает расход при смене суток.
+func (a *Agent) rollLocked() {
+	today := time.Now().Format(dayLayout)
+	if a.usedDay == today {
+		return
+	}
+	a.usedDay = today
+	a.used = 0
+	a.quotaLogged = false
+	a.limDirty = true
+}
+
+func (a *Agent) applyLimitsLocked() {
+	a.guard.SetDomains(a.limits.Domains)
+
+	if a.limits.RateKBps <= 0 {
+		a.limiter.SetLimit(rate.Inf)
+		a.limiter.SetBurst(64 << 10)
+		return
+	}
+	r := rate.Limit(a.limits.RateKBps * 1024)
+	burst := int(r / 4)
+	if burst < 64<<10 {
+		burst = 64 << 10
+	}
+	if burst > 1<<20 {
+		burst = 1 << 20
+	}
+	a.limiter.SetLimit(r)
+	a.limiter.SetBurst(burst)
+}
+
+func (a *Agent) flushLimits() {
+	a.limMu.Lock()
+	if !a.limDirty || a.limPath == "" {
+		a.limMu.Unlock()
+		return
+	}
+	st := limits.State{Values: a.limits, Used: a.used, Day: a.usedDay}
+	a.limDirty = false
+	a.limMu.Unlock()
+
+	if err := limits.Save(a.limPath, st); err != nil {
+		a.log.Printf("не удалось сохранить настройки: %v", err)
+		a.limMu.Lock()
+		a.limDirty = true
+		a.limMu.Unlock()
+	}
+}
 
 func openBrowser(url string) {
 	var cmd *exec.Cmd

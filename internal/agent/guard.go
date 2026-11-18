@@ -6,7 +6,9 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"sync"
 
+	"exitnode/internal/limits"
 	"exitnode/internal/protocol"
 )
 
@@ -14,8 +16,10 @@ import (
 // Главная задача — не дать клиенту попасть в локальную сеть коллеги
 // (роутер, принтер, NAS) и в служебные диапазоны.
 type Guard struct {
-	ports map[int]bool
-	any   bool
+	mu      sync.RWMutex
+	ports   map[int]bool
+	any     bool
+	domains []string
 }
 
 func NewGuard(spec string) (*Guard, error) {
@@ -49,6 +53,42 @@ func (g *Guard) allowed(port int) bool {
 	return g.any || g.ports[port]
 }
 
+// SetDomains задаёт белый список. Пустой список означает "разрешено всё".
+func (g *Guard) SetDomains(spec string) {
+	list := limits.DomainList(spec)
+	g.mu.Lock()
+	g.domains = list
+	g.mu.Unlock()
+}
+
+// allowedHost проверяет домен или IP по белому списку.
+// GPT: "example.com" разрешает и сам домен, и любые поддомены —
+// иначе пришлось бы перечислять каждый поддомен вручную.
+func (g *Guard) allowedHost(host string) bool {
+	g.mu.RLock()
+	domains := g.domains
+	g.mu.RUnlock()
+	if len(domains) == 0 {
+		return true
+	}
+
+	h := strings.ToLower(strings.TrimSuffix(host, "."))
+	if net.ParseIP(h) != nil {
+		for _, d := range domains {
+			if d == h {
+				return true
+			}
+		}
+		return false
+	}
+	for _, d := range domains {
+		if h == d || strings.HasSuffix(h, "."+d) {
+			return true
+		}
+	}
+	return false
+}
+
 // Resolve проверяет порт, резолвит имя и возвращает уже проверенный IP.
 // GPT: агент сам делает DNS и сам подключается по IP, а не по имени —
 // так исключается DNS-rebinding, при котором домен сначала отдаёт
@@ -62,6 +102,12 @@ func (g *Guard) Resolve(ctx context.Context, host string, port int) (string, err
 	}
 	if host == "" {
 		return "", &protocol.OpenError{Code: protocol.CodeUnreachable, Message: "пустой адрес"}
+	}
+	if !g.allowedHost(host) {
+		return "", &protocol.OpenError{
+			Code:    protocol.CodeNotAllowed,
+			Message: "домен не входит в список разрешённых: " + host,
+		}
 	}
 
 	ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)

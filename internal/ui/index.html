@@ -105,9 +105,30 @@
   footer b { color: var(--text); font-weight: 500; }
   .note { color: var(--muted); font-size: 12px; margin-top: 8px; }
 
+  .fields { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 12px; }
+  .field span { display: block; color: var(--muted); font-size: 12.5px; margin-bottom: 6px; }
+  .field input, .field textarea {
+    width: 100%; background: var(--panel2); color: var(--text);
+    border: 1px solid var(--line); border-radius: 9px; padding: 9px 11px;
+    font: 13px/1.4 "Segoe UI", system-ui, sans-serif; outline: none;
+  }
+  .field input:focus, .field textarea:focus { border-color: #3b5b80; }
+  .field textarea { resize: vertical; min-height: 74px; }
+  .field small { display: block; color: var(--muted); font-size: 11.5px; margin-top: 5px; }
+  .quota { margin-top: 16px; }
+  .limitsActions { display: flex; align-items: center; gap: 12px; margin-top: 14px; }
+  .primary {
+    border: 0; background: var(--blue); color: #05121f;
+    border-radius: 9px; padding: 9px 18px; cursor: pointer;
+    font: 600 13px "Segoe UI", system-ui, sans-serif;
+  }
+  .primary:disabled { opacity: .5; cursor: default; }
+  .saved { color: var(--green); font-size: 12px; }
+
   @media (max-width: 720px) {
     .grid { grid-template-columns: 1fr; }
     .res { grid-template-columns: 1fr; }
+    .fields { grid-template-columns: 1fr; }
     .status { margin-left: 0; }
     .toggle { width: 100%; }
     .hide-sm { display: none; }
@@ -176,6 +197,38 @@
     <div id="empty" class="empty">Подключений нет. Программа ничего не передаёт.</div>
   </section>
 
+  <section class="card">
+    <div class="row" style="margin-bottom:0">
+      <div class="label">Ограничения узла</div>
+      <span id="limitsSaved" class="saved"></span>
+    </div>
+    <div class="fields">
+      <label class="field">
+        <span>Квота трафика в сутки, МБ</span>
+        <input id="quota" type="number" min="0" step="100" inputmode="numeric">
+        <small>0 — без ограничения</small>
+      </label>
+      <label class="field">
+        <span>Скорость, КБ/с</span>
+        <input id="rate" type="number" min="0" step="100" inputmode="numeric">
+        <small>0 — без ограничения, общая на все подключения</small>
+      </label>
+    </div>
+    <label class="field" style="margin-top:14px">
+      <span>Разрешённые домены</span>
+      <textarea id="domains" rows="3" placeholder="example.com, *.company.com"></textarea>
+      <small>Пусто — любые домены. Указанный домен разрешает и все его поддомены.</small>
+    </label>
+    <div class="quota">
+      <div class="meterTop"><span>Израсходовано сегодня</span><b id="quotaText">0 Б</b></div>
+      <div class="track"><div id="quotaBar" class="fill green"></div></div>
+    </div>
+    <div class="limitsActions">
+      <button id="saveLimits" class="primary">Сохранить</button>
+      <span class="note" style="margin:0">Действует сразу, без перезапуска</span>
+    </div>
+  </section>
+
   <section class="res">
     <div class="card">
       <div class="label">Наш процесс</div>
@@ -233,6 +286,10 @@ const T = {
   total: (v) => "всего " + v,
   uptimeMin: (m) => m + " мин",
   uptimeHour: (h, m) => h + " ч " + m + " мин",
+  quotaStatus: "Квота исчерпана",
+  quotaSub: "Суточная квота трафика израсходована. Новые подключения отклоняются до полуночи.",
+  quotaUsed: (u, t) => (t > 0 ? u + " из " + t : u + " (без лимита)"),
+  saved: "Сохранено",
 };
 
 function fmtBytes(n) {
@@ -358,7 +415,8 @@ async function poll() {
   $("nodeName").textContent = s.name || "—";
   $("relayAddr").textContent = s.relay || "—";
 
-  if (!s.connected) setStatus("warn", T.connecting);
+  if (s.quota_exceeded) setStatus("warn", T.quotaStatus);
+  else if (!s.connected) setStatus("warn", T.connecting);
   else if (s.enabled) setStatus("on", T.connected);
   else setStatus("off", T.off);
 
@@ -368,7 +426,7 @@ async function poll() {
   btn.classList.toggle("off", !s.enabled);
 
   $("heroTitle").textContent = s.enabled ? T.titleOn : T.titleOff;
-  $("heroSub").textContent = s.enabled ? T.subOn : T.subOff;
+  $("heroSub").textContent = s.quota_exceeded ? T.quotaSub : (s.enabled ? T.subOn : T.subOff);
 
   $("inRate").textContent = fmtRate(s.in_rate);
   $("outRate").textContent = fmtRate(s.out_rate);
@@ -393,8 +451,43 @@ async function poll() {
 
   renderChart(s.history || []);
   renderRows(s.sessions || []);
+  renderLimits(s.limits, s.quota_exceeded);
   $("kill").disabled = !s.sessions.length;
 }
+
+let limitsInit = false;
+
+function renderLimits(l, exceeded) {
+  if (!l) return;
+  if (!limitsInit) {
+    $("quota").value = l.quota_mb || 0;
+    $("rate").value = l.rate_kbps || 0;
+    $("domains").value = l.domains || "";
+    limitsInit = true;
+  }
+  $("quotaText").textContent = T.quotaUsed(fmtBytes(l.used_bytes || 0), l.quota_bytes || 0);
+  const used = Number(l.used_bytes) || 0;
+  const total = Number(l.quota_bytes) || 0;
+  const share = total > 0 ? (used / total) * 100 : 0;
+  $("quotaBar").style.width = Math.min(100, share) + "%";
+  $("quotaBar").className = "fill " + (exceeded || share > 90 ? "amber" : "green");
+}
+
+$("saveLimits").addEventListener("click", async () => {
+  const btn = $("saveLimits");
+  btn.disabled = true;
+  try {
+    await post("/api/limits", {
+      quota_mb: Math.max(0, parseInt($("quota").value, 10) || 0),
+      rate_kbps: Math.max(0, parseInt($("rate").value, 10) || 0),
+      domains: $("domains").value,
+    });
+    $("limitsSaved").textContent = T.saved;
+    setTimeout(() => { $("limitsSaved").textContent = ""; }, 2500);
+  } finally {
+    btn.disabled = false;
+  }
+});
 
 poll();
 setInterval(poll, 1000);

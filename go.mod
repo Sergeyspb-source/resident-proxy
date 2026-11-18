@@ -5,6 +5,7 @@ go 1.26.0
 require (
 	github.com/hashicorp/yamux v0.1.2
 	github.com/shirou/gopsutil/v4 v4.26.10
+	golang.org/x/time v0.16.0
 )
 
 require (
