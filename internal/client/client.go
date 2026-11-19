@@ -14,6 +14,8 @@ import (
 	"io"
 	"log"
 	"net"
+	"net/http"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -24,6 +26,7 @@ import (
 
 type Config struct {
 	Listen      string
+	HTTPListen  string
 	Server      string
 	Key         string
 	User        string
@@ -34,12 +37,13 @@ type Config struct {
 }
 
 type State struct {
-	Running bool
-	Listen  string
-	Server  string
-	Started time.Time
-	In      uint64
-	Out     uint64
+	Running    bool
+	Listen     string
+	HTTPListen string
+	Server     string
+	Started    time.Time
+	In         uint64
+	Out        uint64
 }
 
 // Manager позволяет включать и выключать локальный прокси без перезапуска.
@@ -49,6 +53,7 @@ type Manager struct {
 	mu      sync.Mutex
 	cfg     Config
 	ln      net.Listener
+	hln     net.Listener
 	conns   map[net.Conn]struct{}
 	started time.Time
 	in      atomic.Uint64
@@ -76,14 +81,32 @@ func (m *Manager) Start(cfg Config) error {
 		return err
 	}
 
+	// GPT: второй слушатель — HTTP-прокси для системных настроек Windows:
+	// WinINET не умеет SOCKS5, а HTTP CONNECT умеет.
+	if cfg.HTTPListen == "" {
+		addr, err := freeHTTPListen()
+		if err != nil {
+			ln.Close()
+			return err
+		}
+		cfg.HTTPListen = addr
+	}
+	hln, err := net.Listen("tcp", cfg.HTTPListen)
+	if err != nil {
+		ln.Close()
+		return err
+	}
+
 	m.mu.Lock()
 	if m.ln != nil {
 		m.mu.Unlock()
 		ln.Close()
+		hln.Close()
 		return errors.New("клиент уже подключён")
 	}
 	m.cfg = cfg
 	m.ln = ln
+	m.hln = hln
 	m.conns = make(map[net.Conn]struct{})
 	m.started = time.Now()
 	m.in.Store(0)
@@ -91,14 +114,31 @@ func (m *Manager) Start(cfg Config) error {
 	m.mu.Unlock()
 
 	m.log.Printf("локальный SOCKS5 на %s, шлюз %s", cfg.Listen, cfg.Server)
+	m.log.Printf("HTTP-прокси для системы на %s", cfg.HTTPListen)
 	go m.acceptLoop(ln)
+	go m.acceptHTTP(hln)
 	return nil
+}
+
+// freeHTTPListen ищет свободный порт для HTTP-прокси.
+func freeHTTPListen() (string, error) {
+	for p := 8080; p <= 8099; p++ {
+		addr := fmt.Sprintf("127.0.0.1:%d", p)
+		ln, err := net.Listen("tcp", addr)
+		if err == nil {
+			_ = ln.Close()
+			return addr, nil
+		}
+	}
+	return "", errors.New("нет свободного порта в диапазоне 8080–8099")
 }
 
 func (m *Manager) Stop() {
 	m.mu.Lock()
 	ln := m.ln
+	hln := m.hln
 	m.ln = nil
+	m.hln = nil
 	conns := make([]net.Conn, 0, len(m.conns))
 	for c := range m.conns {
 		conns = append(conns, c)
@@ -108,6 +148,9 @@ func (m *Manager) Stop() {
 
 	if ln != nil {
 		_ = ln.Close()
+	}
+	if hln != nil {
+		_ = hln.Close()
 	}
 	for _, c := range conns {
 		_ = c.Close()
@@ -127,12 +170,13 @@ func (m *Manager) State() State {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	st := State{
-		Running: m.ln != nil,
-		Listen:  m.cfg.Listen,
-		Server:  m.cfg.Server,
-		Started: m.started,
-		In:      m.in.Load(),
-		Out:     m.out.Load(),
+		Running:    m.ln != nil,
+		Listen:     m.cfg.Listen,
+		HTTPListen: m.cfg.HTTPListen,
+		Server:     m.cfg.Server,
+		Started:    m.started,
+		In:         m.in.Load(),
+		Out:        m.out.Load(),
 	}
 	return st
 }
@@ -145,6 +189,106 @@ func (m *Manager) acceptLoop(ln net.Listener) {
 		}
 		go m.handle(c)
 	}
+}
+
+// acceptHTTP принимает подключения HTTP-прокси.
+func (m *Manager) acceptHTTP(ln net.Listener) {
+	for {
+		c, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		go m.handleHTTP(c)
+	}
+}
+
+// dialTarget открывает шифрованный туннель до цели на узле выхода.
+func (m *Manager) dialTarget(cfg Config, host string, port int) (net.Conn, error) {
+	up, err := dialUpstream(cfg)
+	if err != nil {
+		return nil, err
+	}
+	sec, err := secure.NewConn(up, secure.DeriveKey(cfg.Key))
+	if err != nil {
+		up.Close()
+		return nil, err
+	}
+	if err := protocol.WriteJSON(sec, protocol.E2EConnect{Host: host, Port: port}); err != nil {
+		sec.Close()
+		return nil, err
+	}
+	return &countConn{
+		Conn:    sec,
+		onRead:  func(n int) { m.out.Add(uint64(n)) },
+		onWrite: func(n int) { m.in.Add(uint64(n)) },
+	}, nil
+}
+
+// handleHTTP обслуживает HTTP-прокси: CONNECT для HTTPS и обычные запросы.
+func (m *Manager) handleHTTP(c net.Conn) {
+	defer c.Close()
+	if !m.track(c) {
+		return
+	}
+	defer m.untrack(c)
+
+	_ = c.SetDeadline(time.Now().Add(30 * time.Second))
+	br := bufio.NewReader(c)
+	req, err := http.ReadRequest(br)
+	if err != nil {
+		return
+	}
+	defer req.Body.Close()
+
+	host, port := req.Host, 80
+	if req.Method == http.MethodConnect {
+		port = 443
+		if h, p, err := net.SplitHostPort(req.Host); err == nil {
+			host = h
+			if n, err := strconv.Atoi(p); err == nil {
+				port = n
+			}
+		}
+	} else if req.URL != nil && req.URL.Host != "" {
+		host = req.URL.Hostname()
+		if p := req.URL.Port(); p != "" {
+			if n, err := strconv.Atoi(p); err == nil {
+				port = n
+			}
+		}
+	}
+	if host == "" {
+		_, _ = c.Write([]byte("HTTP/1.1 400 Bad Request\r\n\r\n"))
+		return
+	}
+
+	up, err := m.dialTarget(m.cfgCopy(), host, port)
+	if err != nil {
+		m.log.Printf("%s:%d: %v", host, port, err)
+		_, _ = c.Write([]byte("HTTP/1.1 502 Bad Gateway\r\n\r\n"))
+		return
+	}
+	defer up.Close()
+
+	if req.Method == http.MethodConnect {
+		if _, err := c.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n")); err != nil {
+			return
+		}
+		_ = c.SetDeadline(time.Time{})
+		protocol.Join(&protocol.BufConn{Conn: c, R: br}, up)
+		return
+	}
+
+	req.RequestURI = ""
+	req.URL.Scheme = "http"
+	req.URL.Host = host
+	req.Header.Del("Proxy-Connection")
+	req.Header.Set("Connection", "close")
+	if err := req.Write(up); err != nil {
+		return
+	}
+	_ = c.SetDeadline(time.Time{})
+	protocol.Join(c, up)
 }
 
 func (m *Manager) track(c net.Conn) bool {
@@ -216,22 +360,9 @@ func (m *Manager) handle(c net.Conn) {
 	port := int(binary.BigEndian.Uint16(portBuf))
 
 	cfg := m.cfgCopy()
-	up, err := dialUpstream(cfg)
+	sec, err := m.dialTarget(cfg, host, port)
 	if err != nil {
 		m.log.Printf("%s:%d: %v", host, port, err)
-		reply(c, 5)
-		return
-	}
-
-	sec, err := secure.NewConn(up, secure.DeriveKey(cfg.Key))
-	if err != nil {
-		up.Close()
-		reply(c, 5)
-		return
-	}
-	// Настоящая цель уходит только внутри шифрованного потока.
-	if err := protocol.WriteJSON(sec, protocol.E2EConnect{Host: host, Port: port}); err != nil {
-		sec.Close()
 		reply(c, 5)
 		return
 	}
@@ -241,17 +372,7 @@ func (m *Manager) handle(c net.Conn) {
 		return
 	}
 	_ = c.SetDeadline(time.Time{})
-
-	metered := &countConn{
-		Conn: sec,
-		onRead: func(n int) {
-			m.out.Add(uint64(n))
-		},
-		onWrite: func(n int) {
-			m.in.Add(uint64(n))
-		},
-	}
-	protocol.Join(&protocol.BufConn{Conn: c, R: br}, metered)
+	protocol.Join(&protocol.BufConn{Conn: c, R: br}, sec)
 }
 
 // countConn считает байты в обе стороны для статистики клиента.

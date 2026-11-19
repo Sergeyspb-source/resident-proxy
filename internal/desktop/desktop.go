@@ -10,6 +10,8 @@ type Hooks struct {
 	Enabled     func() bool
 	OnToggle    func(bool)
 	ToggleLabel string
+	// GPT: OnExit вызывается после закрытия трея, чтобы вернуть настройки системы.
+	OnExit func()
 }
 
 var launch struct {

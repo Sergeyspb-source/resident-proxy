@@ -323,6 +323,7 @@ func runClientGUI(cfg client.Config, invite string, trayMode bool) {
 		Enabled:     app.Running,
 		OnToggle:    func(bool) { app.Toggle() },
 		ToggleLabel: "Подключено",
+		OnExit:      app.Disconnect,
 	})
 }
 

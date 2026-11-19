@@ -39,6 +39,9 @@ func Run(h Hooks) {
 	win.mu.Unlock()
 	go windowLoop()
 	systray.Run(func() { onReady(h) }, func() {})
+	if h.OnExit != nil {
+		h.OnExit()
+	}
 }
 
 func onReady(h Hooks) {

@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"exitnode/internal/client"
+	"exitnode/internal/sysproxy"
 )
 
 //go:embed index.html
@@ -40,6 +41,8 @@ type App struct {
 func NewApp(mgr *client.Manager, path string, logger *log.Logger) *App {
 	a := &App{mgr: mgr, path: path, log: logger}
 	a.load()
+	// GPT: если прошлый запуск завершился аварийно, возвращаем настройки прокси.
+	sysproxy.RestoreIfLeftover()
 	return a
 }
 
@@ -114,7 +117,24 @@ func (a *App) Connect(server, key string) error {
 }
 
 func (a *App) Disconnect() {
+	_ = sysproxy.Disable()
 	a.mgr.Stop()
+}
+
+// SetSystemProxy включает или выключает системный прокси Windows.
+// GPT: прокси включается только при работающем клиенте, иначе порт мёртв.
+func (a *App) SetSystemProxy(on bool) error {
+	if !sysproxy.Supported() {
+		return errors.New("системный прокси доступен только в Windows")
+	}
+	if !on {
+		return sysproxy.Disable()
+	}
+	st := a.mgr.State()
+	if !st.Running || st.HTTPListen == "" {
+		return errors.New("сначала подключитесь")
+	}
+	return sysproxy.Enable(st.HTTPListen)
 }
 
 func (a *App) Toggle() {
@@ -175,15 +195,18 @@ func freeListen() (string, error) {
 }
 
 type stateView struct {
-	Running  bool   `json:"running"`
-	Listen   string `json:"listen"`
-	Server   string `json:"server"`
-	HasKey   bool   `json:"has_key"`
-	In       uint64 `json:"in"`
-	Out      uint64 `json:"out"`
-	Uptime   int64  `json:"uptime"`
-	Platform string `json:"platform"`
-	Error    string `json:"error,omitempty"`
+	Running        bool   `json:"running"`
+	Listen         string `json:"listen"`
+	Server         string `json:"server"`
+	HasKey         bool   `json:"has_key"`
+	In             uint64 `json:"in"`
+	Out            uint64 `json:"out"`
+	Uptime         int64  `json:"uptime"`
+	Platform       string `json:"platform"`
+	SystemProxy    bool   `json:"system_proxy"`
+	CanSystemProxy bool   `json:"can_system_proxy"`
+	HTTPProxy      string `json:"http_proxy"`
+	Error          string `json:"error,omitempty"`
 }
 
 func (a *App) state() stateView {
@@ -193,15 +216,18 @@ func (a *App) state() stateView {
 	last := a.last
 	a.mu.Unlock()
 	return stateView{
-		Running:  st.Running,
-		Listen:   st.Listen,
-		Server:   st.Server,
-		HasKey:   hasKey,
-		In:       st.In,
-		Out:      st.Out,
-		Uptime:   int64(time.Since(st.Started).Seconds()),
-		Platform: runtime.GOOS,
-		Error:    last,
+		Running:        st.Running,
+		Listen:         st.Listen,
+		Server:         st.Server,
+		HasKey:         hasKey,
+		In:             st.In,
+		Out:            st.Out,
+		Uptime:         int64(time.Since(st.Started).Seconds()),
+		Platform:       runtime.GOOS,
+		SystemProxy:    sysproxy.Enabled(),
+		CanSystemProxy: sysproxy.Supported(),
+		HTTPProxy:      st.HTTPListen,
+		Error:          last,
 	}
 }
 
@@ -256,6 +282,24 @@ func Serve(addr string, app *App, logger *log.Logger, onReady func(url string)) 
 			return
 		}
 		app.Disconnect()
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	})
+	// GPT: системный прокси Windows включается и выключается из панели клиента.
+	mux.HandleFunc("/api/system-proxy", func(w http.ResponseWriter, r *http.Request) {
+		if !checkPost(w, r) {
+			return
+		}
+		var body struct {
+			Enabled bool `json:"enabled"`
+		}
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<10)).Decode(&body); err != nil {
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
+		if err := app.SetSystemProxy(body.Enabled); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
 		_, _ = w.Write([]byte(`{"ok":true}`))
 	})
 

@@ -115,6 +115,15 @@
     <div class="note">Флаг WebRTC обязателен: без него браузер может выдать реальный IP в обход прокси.</div>
   </div>
 
+  <div class="card" id="sysproxyCard" hidden>
+    <div class="row"><div class="label">Системный прокси</div><span id="sysproxyNote" class="note" style="margin:0"></span></div>
+    <div class="actions">
+      <button id="sysproxy" class="ghost">Включить для Windows</button>
+      <span class="note" style="margin:0">Chrome и Edge подхватят сами</span>
+    </div>
+    <div class="note">Firefox по умолчанию использует свои настройки — переключите в нём «системные настройки прокси».</div>
+  </div>
+
   <footer>
     Ключ равносилен паролю: не пересылайте его в открытых чатах. Программа не требует прав администратора.
     Закрытие окна не останавливает прокси — он работает, пока иконка в трее; полный выход — через меню иконки.
@@ -152,6 +161,7 @@ async function post(path, body) {
 }
 
 let lastServer = "";
+let sysOn = false;
 
 async function poll() {
   let s;
@@ -189,6 +199,14 @@ async function poll() {
   } else {
     $("actionNote").textContent = "";
   }
+
+  sysOn = !!s.system_proxy;
+  $("sysproxyCard").hidden = !s.can_system_proxy;
+  if (s.can_system_proxy) {
+    $("sysproxy").textContent = sysOn ? "Выключить" : "Включить для Windows";
+    $("sysproxy").disabled = !s.running && !sysOn;
+    $("sysproxyNote").textContent = sysOn ? "включён" : (s.running ? "" : "сначала подключитесь");
+  }
 }
 
 $("connect").addEventListener("click", async () => {
@@ -204,6 +222,15 @@ $("disconnect").addEventListener("click", async () => {
   $("disconnect").disabled = true;
   await post("/api/disconnect");
   $("disconnect").disabled = false;
+  poll();
+});
+
+$("sysproxy").addEventListener("click", async () => {
+  $("sysproxy").disabled = true;
+  const res = await post("/api/system-proxy", { enabled: !sysOn });
+  $("sysproxy").disabled = false;
+  if (res && res.error) { $("error").textContent = res.error; $("error").hidden = false; return; }
+  $("error").hidden = true;
   poll();
 });
 
