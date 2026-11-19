@@ -20,6 +20,7 @@ import (
 	"exitnode/internal/hop"
 	"exitnode/internal/relay"
 	"exitnode/internal/setup"
+	"exitnode/internal/traylinux"
 )
 
 func main() {
@@ -295,11 +296,24 @@ func runClientGUI(cfg client.Config, invite string, trayMode bool) {
 		}
 	}()
 
+	// GPT: на Linux показываем иконку в трее с меню вместо простой вкладки браузера.
 	if runtime.GOOS != "windows" {
-		if !trayMode {
-			_ = exec.Command("xdg-open", url).Start()
+		if trayMode {
+			log.Printf("клиент работает; остановите Ctrl+C")
+			select {}
 		}
-		log.Printf("клиент работает; остановите Ctrl+C")
+		if stop, err := traylinux.Run(traylinux.Options{
+			Title:   "Exitnode",
+			Open:    func() { openPanel(url) },
+			Running: app.Running,
+			Toggle:  app.Toggle,
+		}, log.Default()); err != nil {
+			log.Printf("трей недоступен: %v; открываю браузер", err)
+			_ = exec.Command("xdg-open", url).Start()
+		} else {
+			defer stop()
+		}
+		log.Printf("клиент работает; выход через меню трея или Ctrl+C")
 		select {}
 	}
 
@@ -310,6 +324,22 @@ func runClientGUI(cfg client.Config, invite string, trayMode bool) {
 		OnToggle:    func(bool) { app.Toggle() },
 		ToggleLabel: "Подключено",
 	})
+}
+
+// openPanel открывает панель клиента. Если есть Chrome или Chromium,
+// окно будет без адресной строки; иначе отдельное окно Firefox.
+func openPanel(url string) {
+	for _, bin := range []string{"google-chrome", "chromium", "chromium-browser"} {
+		if _, err := exec.LookPath(bin); err == nil {
+			_ = exec.Command(bin, "--app="+url, "--class=Exitnode").Start()
+			return
+		}
+	}
+	if _, err := exec.LookPath("firefox"); err == nil {
+		_ = exec.Command("firefox", "--new-window", url).Start()
+		return
+	}
+	_ = exec.Command("xdg-open", url).Start()
 }
 
 func runHop(args []string) {

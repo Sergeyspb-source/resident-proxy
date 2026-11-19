@@ -11,6 +11,8 @@ import (
 	"os/user"
 	"path/filepath"
 	"strings"
+
+	"exitnode/internal/traylinux"
 )
 
 const unitName = "exitnode.service"
@@ -156,11 +158,23 @@ func installDesktop(home, bin string) error {
 		return err
 	}
 
+	// GPT: кладём иконку в тему, чтобы ярлык в меню был не безымянным.
+	icons := filepath.Join(home, ".local", "share", "icons", "hicolor", "128x128", "apps")
+	if err := os.MkdirAll(icons, 0o755); err != nil {
+		return err
+	}
+	if icon := traylinux.Icon(); len(icon) > 0 {
+		if err := os.WriteFile(filepath.Join(icons, "exitnode.png"), icon, 0o644); err != nil {
+			return err
+		}
+	}
+
 	client := fmt.Sprintf(`[Desktop Entry]
 Type=Application
 Name=Exitnode Client
 Comment=Локальный SOCKS5 клиент
 Exec="%s" client -ui
+Icon=exitnode
 Terminal=true
 Categories=Network;
 `, bin)
@@ -173,6 +187,7 @@ Type=Application
 Name=Exitnode Invite
 Comment=Открыть приглашение Exitnode
 Exec="%s" client -invite %%f
+Icon=exitnode
 Terminal=true
 NoDisplay=true
 MimeType=application/x-exitnode;
@@ -208,6 +223,7 @@ func uninstallAll(home string) (string, error) {
 	apps := filepath.Join(home, ".local", "share", "applications")
 	_ = os.Remove(filepath.Join(apps, "exitnode-client.desktop"))
 	_ = os.Remove(filepath.Join(apps, "exitnode-invite.desktop"))
+	_ = os.Remove(filepath.Join(home, ".local", "share", "icons", "hicolor", "128x128", "apps", "exitnode.png"))
 	_ = os.Remove(filepath.Join(home, ".local", "share", "mime", "packages", "exitnode.xml"))
 	_ = exec.Command("update-mime-database", filepath.Join(home, ".local", "share", "mime")).Run()
 	_ = exec.Command("update-desktop-database", apps).Run()
