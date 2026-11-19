@@ -1,0 +1,12 @@
+[exitnode]
+enabled = true
+backend = systemd
+journalmatch = _SYSTEMD_UNIT=exitnode.service
+filter = exitnode
+port = 2083,2084
+protocol = tcp
+maxretry = 12
+findtime = 10m
+bantime = 30m
+bantime.increment = true
+banaction = nftables[type=multiport]

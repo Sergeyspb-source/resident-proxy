@@ -176,6 +176,29 @@ sysctl -w net.ipv4.ip_forward=1
 nft add rule ip nat prerouting ip daddr 10.8.0.1 tcp dport 1080 dnat to 10.9.0.2:1080
 ```
 
+## Защита шлюза
+
+Порты 2083 и 2084 открыты в интернет, поэтому на VPS стоят лимиты и баны.
+Готовые файлы — в `deploy/`.
+
+```
+apt-get install -y fail2ban
+install -m 644 deploy/fail2ban-exitnode.conf  /etc/fail2ban/filter.d/exitnode.conf
+install -m 644 deploy/fail2ban-exitnode.local /etc/fail2ban/jail.d/exitnode.local
+install -m 644 deploy/exitnode-guard.nft      /etc/exitnode/guard.nft
+install -m 644 deploy/exitnode-guard.service  /etc/systemd/system/exitnode-guard.service
+systemctl daemon-reload
+systemctl enable --now exitnode-guard fail2ban
+```
+
+fail2ban читает журнал `exitnode.service` и банит IP на 30 минут после 12 неудачных
+попыток за 10 минут: неверный ключ или подключение без приветствия. Бан
+закрывает только 2083/2084, SSH остаётся доступен.
+
+`exitnode-guard` ограничивает новые соединения: 900 в минуту и 400 одновременно
+с одного IP на 2084, 30 в минуту на 2083. Это защита от перебора и от попыток
+исчерпать файловые дескрипторы.
+
 Порт 1080 на публичном интерфейсе VPS1 закрыть файрволом.
 
 ## ПК коллеги — агент

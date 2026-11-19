@@ -1,0 +1,11 @@
+table inet exitnode_guard {
+    chain input {
+        type filter hook input priority -10; policy accept;
+        tcp dport 2084 ct state new meter soc4 { ip saddr limit rate over 900/minute burst 150 packets } drop
+        tcp dport 2084 ct state new meter soc6 { ip6 saddr limit rate over 900/minute burst 150 packets } drop
+        tcp dport 2083 ct state new meter ag4 { ip saddr limit rate over 30/minute burst 10 packets } drop
+        tcp dport 2083 ct state new meter ag6 { ip6 saddr limit rate over 30/minute burst 10 packets } drop
+        tcp dport 2084 ct state new meter conc4 { ip saddr ct count over 400 } drop
+        tcp dport 2084 ct state new meter conc6 { ip6 saddr ct count over 400 } drop
+    }
+}
