@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Шлюз — Exitnode</title>
+<style>
+  :root {
+    --bg: #0f1216;
+    --panel: #161b22;
+    --line: #232a34;
+    --text: #e6edf3;
+    --muted: #8b95a3;
+    --green: #43d17a;
+    --blue: #5aa9ff;
+    --red: #ef5b5b;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 22px 18px 40px; }
+  header { display: flex; align-items: baseline; gap: 12px; margin-bottom: 18px; }
+  .brand { font-size: 19px; font-weight: 650; }
+  .who { color: var(--muted); font-size: 12.5px; }
+  .status { margin-left: auto; font-size: 12.5px; color: var(--muted); }
+  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--green); margin-right: 6px; }
+  .dot.off { background: var(--red); }
+  .grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 16px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; }
+  .label { color: var(--muted); font-size: 12px; letter-spacing: .02em; }
+  .big { font-size: 20px; font-weight: 650; margin-top: 4px; font-variant-numeric: tabular-nums; }
+  .sub { color: var(--muted); font-size: 11.5px; }
+  h2 { font-size: 14px; font-weight: 600; color: var(--muted); margin: 22px 0 8px; text-transform: uppercase; letter-spacing: .04em; }
+  table { width: 100%; border-collapse: collapse; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); font-size: 13px; }
+  th { color: var(--muted); font-weight: 500; font-size: 11.5px; text-transform: uppercase; letter-spacing: .03em; }
+  tr:last-child td { border-bottom: 0; }
+  td.num { font-variant-numeric: tabular-nums; }
+  .empty { color: var(--muted); padding: 14px 10px; font-size: 13px; }
+  .host { color: var(--blue); }
+  footer { margin-top: 26px; color: var(--muted); font-size: 12px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="brand">Шлюз</div>
+    <div class="who">узлы выхода и сессии</div>
+    <div class="status"><span id="dot" class="dot"></span><span id="statusText">проверяю</span></div>
+  </header>
+
+  <div class="grid">
+    <div class="card"><div class="label">Узлов онлайн</div><div id="agents" class="big">0</div><div class="sub">подключено к шлюзу</div></div>
+    <div class="card"><div class="label">Сессий</div><div id="sessions" class="big">0</div><div class="sub">сейчас</div></div>
+    <div class="card"><div class="label">Скорость</div><div id="rate" class="big">0 Б/с</div><div class="sub">от клиентов</div></div>
+    <div class="card"><div class="label">Всего</div><div id="total" class="big">0 Б</div><div class="sub">принято / отдано</div></div>
+  </div>
+
+  <h2>Узлы</h2>
+  <table>
+    <thead><tr><th>Имя</th><th>Версия</th><th>Адрес</th><th>Подключён</th><th>Ключей</th><th>Сессий</th><th>Принято</th><th>Отдано</th></tr></thead>
+    <tbody id="agentsBody"><tr><td colspan="8" class="empty">пока никого</td></tr></tbody>
+  </table>
+
+  <h2>Сессии</h2>
+  <table>
+    <thead><tr><th>#</th><th>Узел</th><th>Клиент</th><th>Цель</th><th>Время</th><th>Принято</th><th>Отдано</th></tr></thead>
+    <tbody id="sessionsBody"><tr><td colspan="7" class="empty">активных нет</td></tr></tbody>
+  </table>
+
+  <footer>Панель слушает только 127.0.0.1. Для доступа снаружи — SSH-туннель.</footer>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const fmt = (n) => {
+  n = Number(n) || 0;
+  if (n < 1024) return Math.round(n) + " Б";
+  const u = ["КБ", "МБ", "ГБ", "ТБ"]; let v = n / 1024, i = 0;
+  while (v >= 1024 && i < u.length - 1) { v /= 1024; i++; }
+  return v.toFixed(v >= 100 ? 0 : 1) + " " + u[i];
+};
+const dur = (s) => {
+  s = Math.max(0, Math.round(s));
+  if (s < 60) return s + " с";
+  const m = Math.floor(s / 60);
+  if (m < 60) return m + " мин";
+  const h = Math.floor(m / 60);
+  return h + " ч " + (m % 60) + " мин";
+};
+const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({
+  "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+}[c]));
+
+function row(cells) {
+  return "<tr>" + cells.map((c) => c).join("") + "</tr>";
+}
+
+async function poll() {
+  let s;
+  try {
+    s = await (await fetch("/api/state", { cache: "no-store" })).json();
+  } catch (e) {
+    $("dot").className = "dot off";
+    $("statusText").textContent = "шлюз не отвечает";
+    return;
+  }
+  $("dot").className = "dot";
+  $("statusText").textContent = "работает";
+
+  const now = Math.floor(Date.now() / 1000);
+  $("agents").textContent = s.agents.length;
+  $("sessions").textContent = s.sessions.length;
+  $("rate").textContent = fmt(s.in_rate) + "/с";
+  $("total").textContent = fmt(s.total_in) + " / " + fmt(s.total_out);
+
+  if (s.agents.length) {
+    $("agentsBody").innerHTML = s.agents.map((a) => row([
+      "<td>" + esc(a.name) + "</td>",
+      "<td class='num'>" + esc(a.version) + "</td>",
+      "<td class='num'>" + esc(a.remote) + "</td>",
+      "<td class='num'>" + dur(now - a.since) + "</td>",
+      "<td class='num'>" + a.keys + "</td>",
+      "<td class='num'>" + a.sessions + "</td>",
+      "<td class='num'>" + fmt(a.in) + "</td>",
+      "<td class='num'>" + fmt(a.out) + "</td>",
+    ])).join("");
+  } else {
+    $("agentsBody").innerHTML = "<tr><td colspan='8' class='empty'>пока никого</td></tr>";
+  }
+
+  if (s.sessions.length) {
+    $("sessionsBody").innerHTML = s.sessions.map((x) => row([
+      "<td class='num'>" + x.id + "</td>",
+      "<td>" + esc(x.agent) + "</td>",
+      "<td class='num'>" + esc(x.client) + "</td>",
+      "<td class='host'>" + esc(x.host) + ":" + x.port + "</td>",
+      "<td class='num'>" + dur(now - x.since) + "</td>",
+      "<td class='num'>" + fmt(x.in) + "</td>",
+      "<td class='num'>" + fmt(x.out) + "</td>",
+    ])).join("");
+  } else {
+    $("sessionsBody").innerHTML = "<tr><td colspan='7' class='empty'>активных нет</td></tr>";
+  }
+}
+
+poll();
+setInterval(poll, 1000);
+</script>
+</body>
+</html>

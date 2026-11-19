@@ -1,4 +1,4 @@
 // Пакет buildinfo хранит версию продукта (не протокола).
 package buildinfo
 
-const Version = "0.0.18"
+const Version = "0.0.19"

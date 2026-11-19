@@ -19,6 +19,7 @@ import (
 	"exitnode/internal/desktop"
 	"exitnode/internal/hop"
 	"exitnode/internal/relay"
+	"exitnode/internal/relayui"
 	"exitnode/internal/setup"
 	"exitnode/internal/traylinux"
 )
@@ -75,6 +76,7 @@ func runRelay(args []string) {
 	tokenFile := fs.String("token-file", "", "файл с токеном (вместо -token)")
 	fs.BoolVar(&cfg.Dev, "dev", false, "тестовый режим: разрешить работу без TLS")
 	fs.BoolVar(&cfg.SocksTLS, "socks-tls", false, "шифровать SOCKS5 тем же сертификатом")
+	uiAddr := fs.String("ui", "", "локальная панель шлюза, например 127.0.0.1:17880")
 	_ = fs.Parse(args)
 
 	if cfg.Token == "" && *tokenFile != "" {
@@ -107,7 +109,18 @@ func runRelay(args []string) {
 		log.Println("ВНИМАНИЕ: SOCKS5 без TLS, это допустимо только в -dev")
 	}
 
-	if err := relay.New(cfg, log.Default()).Serve(); err != nil {
+	r := relay.New(cfg, log.Default())
+	if *uiAddr != "" {
+		// GPT: панель шлюза запускается рядом с relay и слушает только loopback.
+		go func() {
+			if err := relayui.Serve(*uiAddr, r, log.Default(), func(u string) {
+				log.Printf("панель шлюза: %s", u)
+			}); err != nil {
+				log.Printf("панель шлюза остановлена: %v", err)
+			}
+		}()
+	}
+	if err := r.Serve(); err != nil {
 		log.Fatal(err)
 	}
 }

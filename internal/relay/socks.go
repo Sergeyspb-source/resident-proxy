@@ -134,7 +134,11 @@ func (r *Relay) handleSocks(c net.Conn) {
 	}
 	_ = c.SetDeadline(time.Time{})
 
-	protocol.Join(&protocol.BufConn{Conn: c, R: br}, st)
+	// GPT: считаем сессию для панели шлюза.
+	sess := r.trackSession(link, label, host, port)
+	defer r.finishSession(sess)
+
+	protocol.Join(&protocol.BufConn{Conn: c, R: br}, &countConn{Conn: st, s: sess, link: link})
 }
 
 func (r *Relay) open(link *agentLink, req protocol.OpenRequest) (net.Conn, error) {

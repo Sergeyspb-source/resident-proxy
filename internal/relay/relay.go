@@ -11,6 +11,7 @@ import (
 	"net"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/hashicorp/yamux"
@@ -36,6 +37,11 @@ type agentLink struct {
 	keys    []protocol.Key
 	closed  bool
 	sess    *yamux.Session
+
+	// GPT: счётчики для панели шлюза.
+	in   atomic.Uint64
+	out  atomic.Uint64
+	live atomic.Int64
 }
 
 type Relay struct {
@@ -45,6 +51,11 @@ type Relay struct {
 	mu    sync.Mutex
 	links []*agentLink
 	byKey map[string]*agentLink
+
+	// GPT: активные сессии для панели шлюза.
+	sessMu   sync.Mutex
+	sessions map[uint64]*session
+	nextID   uint64
 
 	tunnelSem chan struct{}
 	socksSem  chan struct{}
@@ -60,6 +71,7 @@ func New(cfg Config, logger *log.Logger) *Relay {
 		cfg:       cfg,
 		log:       logger,
 		byKey:     make(map[string]*agentLink),
+		sessions:  make(map[uint64]*session),
 		tunnelSem: make(chan struct{}, maxTunnelConns),
 		socksSem:  make(chan struct{}, maxSocksConns),
 	}
