@@ -17,6 +17,7 @@ import (
 	"exitnode/internal/client"
 	"exitnode/internal/clientui"
 	"exitnode/internal/desktop"
+	"exitnode/internal/hop"
 	"exitnode/internal/relay"
 	"exitnode/internal/setup"
 )
@@ -36,6 +37,8 @@ func main() {
 		runAgent(os.Args[2:])
 	case "client":
 		runClient(os.Args[2:])
+	case "hop":
+		runHop(os.Args[2:])
 	case "setup":
 		runSetup(os.Args[2:])
 	case "help", "-h", "--help":
@@ -52,6 +55,7 @@ func usage() {
   exitnode relay   запуск на VPS2 (шлюз)
   exitnode agent   запуск на ПК коллеги (узел выхода)
   exitnode client  локальный SOCKS5 для того, кто пользуется узлом
+  exitnode hop     проброс порта на промежуточном VPS1
   exitnode setup   установка, ярлыки, автозапуск, удаление
 
 Флаги: exitnode relay -h  /  exitnode agent -h  /  exitnode client -h  /  exitnode setup -h
@@ -308,6 +312,23 @@ func runClientGUI(cfg client.Config, invite string, trayMode bool) {
 	})
 }
 
+func runHop(args []string) {
+	fs := flag.NewFlagSet("hop", flag.ExitOnError)
+	var cfg hop.Config
+	fs.StringVar(&cfg.Listen, "listen", "0.0.0.0:2084", "адрес, который слушает VPS1")
+	fs.StringVar(&cfg.Target, "target", "", "адрес SOCKS на VPS2 (обязателен)")
+	fs.IntVar(&cfg.MaxConns, "max-conns", 512, "максимум одновременных соединений")
+	_ = fs.Parse(args)
+
+	if cfg.Target == "" {
+		fmt.Fprintln(os.Stderr, "нужен -target, например 31.77.194.253:2084")
+		os.Exit(2)
+	}
+	if err := hop.New(cfg, log.Default()).Serve(); err != nil {
+		log.Fatal(err)
+	}
+}
+
 func runSetup(args []string) {
 	fs := flag.NewFlagSet("setup", flag.ExitOnError)
 	var opts setup.Options
@@ -316,6 +337,7 @@ func runSetup(args []string) {
 	fs.StringVar(&opts.Invite, "invite", "", "файл приглашения узла")
 	fs.BoolVar(&opts.Uninstall, "uninstall", false, "удалить программу")
 	fs.BoolVar(&opts.Systemd, "systemd", false, "Linux: установить systemd-службу")
+	fs.BoolVar(&opts.Desktop, "desktop", false, "Linux: ярлык клиента и ассоциация .exitnode")
 	fs.StringVar(&opts.Relay, "relay", "", "Linux: адрес шлюза")
 	fs.StringVar(&opts.TokenFile, "token-file", "", "Linux: файл с токеном")
 	fs.StringVar(&opts.PublicSocks, "public-socks", "", "Linux: адрес SOCKS для приглашений")

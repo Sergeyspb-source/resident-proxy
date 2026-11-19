@@ -6,6 +6,7 @@ type Options struct {
 	Client      bool
 	Uninstall   bool
 	Systemd     bool
+	Desktop     bool
 	Invite      string
 	Relay       string
 	TokenFile   string

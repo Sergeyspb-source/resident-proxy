@@ -146,11 +146,24 @@ User=exitnode
 WantedBy=multi-user.target
 ```
 
-## VPS1 — проброс без кода
+## VPS1 — второй хоп
 
-Клиент ходит в VPN, поэтому SOCKS5 должен слушать только адрес в туннеле.
+Встроенный режим: VPS1 принимает TCP и пересылает его на VPS2. TLS клиента
+заканчивается на VPS2, поэтому VPS1 видит только шифротекст.
 
-Через `socat` (проще всего):
+```
+exitnode hop -listen 0.0.0.0:2084 -target 203.0.113.10:2084 -max-conns 512
+```
+
+Клиенту указывают адрес VPS1, имя в сертификате остаётся от VPS2:
+
+```
+exitnode client -server VPS1:2084 -server-name proxy.example.com -tls -key-file key.txt
+```
+
+Альтернатива без нашего бинарника.
+
+Через `socat`:
 
 ```
 socat TCP-LISTEN:1080,bind=10.8.0.1,fork,reuseaddr TCP:10.9.0.2:1080
