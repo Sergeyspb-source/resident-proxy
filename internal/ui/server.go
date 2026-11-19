@@ -2,6 +2,7 @@
 package ui
 
 import (
+	"context"
 	_ "embed"
 	"encoding/json"
 	"errors"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"exitnode/internal/monitor"
+	"exitnode/internal/update"
 )
 
 //go:embed index.html
@@ -121,6 +123,9 @@ func Serve(addr string, reg *monitor.Registry, ctrl Controller, sys *monitor.Sys
 	mux.HandleFunc("/api/keys/limits", h.setKeyLimits)
 	mux.HandleFunc("/api/agent-invite", h.agentInvite)
 	mux.HandleFunc("/api/autostart", h.setAutostart)
+	// GPT: проверка обновлений перенесена в Go, чтобы подпись проверялась
+	// на стороне программы, а не в браузере.
+	mux.HandleFunc("/api/update", h.getUpdate)
 
 	// GPT: проверка Host и RemoteAddr закрывает DNS-rebinding на панель.
 	guard := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -131,7 +136,7 @@ func Serve(addr string, reg *monitor.Registry, ctrl Controller, sys *monitor.Sys
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("Referrer-Policy", "no-referrer")
-		w.Header().Set("Content-Security-Policy", "default-src 'self'; connect-src 'self' https://api.github.com; style-src 'unsafe-inline'; script-src 'unsafe-inline'")
+		w.Header().Set("Content-Security-Policy", "default-src 'self'; connect-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'")
 		mux.ServeHTTP(w, r)
 	})
 
@@ -236,6 +241,30 @@ func (h *handler) getState(w http.ResponseWriter, r *http.Request) {
 
 // toggle и kill требуют кастомный заголовок: сторонний сайт не сможет
 // отправить такой запрос без CORS-preflight, который мы не разрешаем.
+// getUpdate отдаёт сведения о последнем релизе.
+// GPT: подпись манифеста проверяется в Go, панель только показывает результат.
+func (h *handler) getUpdate(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+	defer cancel()
+
+	resp := map[string]any{}
+	rel, err := update.Latest(ctx, "")
+	if rel != nil {
+		resp["version"] = rel.Version
+		resp["url"] = rel.URL
+		resp["verified"] = rel.Verified
+	}
+	if err != nil {
+		resp["error"] = err.Error()
+	}
+	_ = json.NewEncoder(w).Encode(resp)
+}
+
 func (h *handler) toggle(w http.ResponseWriter, r *http.Request) {
 	if !checkPost(w, r) {
 		return

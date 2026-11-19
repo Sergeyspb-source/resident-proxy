@@ -199,6 +199,24 @@ fail2ban читает журнал `exitnode.service` и банит IP на 30 �
 с одного IP на 2084, 30 в минуту на 2083. Это защита от перебора и от попыток
 исчерпать файловые дескрипторы.
 
+## Подпись обновлений
+
+Каждый релиз содержит `update.json`: версия и sha256 файлов, подписанные
+ed25519. Публичный ключ вшит в программу (`internal/update/pubkey.go`),
+приватный хранится вне репозитория.
+
+Панель проверяет подпись через `/api/update`. Если манифеста нет или подпись
+не сходится, версия показывается красным с пометкой «подпись не проверена».
+
+Выпуск:
+
+```
+go run ./cmd/sign -key <файл ключа> -version 0.0.16 -dir bin ^
+  -files exitnode-agent.exe,exitnode-client.exe,exitnode-linux
+gh release create v0.0.16 bin/exitnode-agent.exe bin/exitnode-client.exe ^
+  bin/exitnode-linux bin/update.json
+```
+
 Порт 1080 на публичном интерфейсе VPS1 закрыть файрволом.
 
 ## ПК коллеги — агент
