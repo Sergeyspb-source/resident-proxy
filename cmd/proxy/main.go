@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -20,6 +21,7 @@ import (
 	"exitnode/internal/hop"
 	"exitnode/internal/relay"
 	"exitnode/internal/relayui"
+	"exitnode/internal/routeprofile"
 	"exitnode/internal/setup"
 	"exitnode/internal/traylinux"
 )
@@ -43,6 +45,14 @@ func main() {
 		runHop(os.Args[2:])
 	case "setup":
 		runSetup(os.Args[2:])
+	case "route-select":
+		if runtime.GOOS != "linux" || len(os.Args) != 2 {
+			os.Exit(2)
+		}
+		if err := routeprofile.Apply(context.Background(), os.Stdin); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
 	case "help", "-h", "--help":
 		usage()
 	default:
@@ -235,6 +245,7 @@ func runAgent(args []string) {
 	})
 }
 
+// GPT: The dedicated Linux route service can start the SOCKS listener on its own.
 func runClient(args []string) {
 	fs := flag.NewFlagSet("client", flag.ExitOnError)
 	var cfg client.Config
@@ -247,6 +258,7 @@ func runClient(args []string) {
 	fs.StringVar(&cfg.ServerName, "server-name", "", "имя в TLS-сертификате шлюза")
 	fs.BoolVar(&cfg.Insecure, "insecure", false, "не проверять сертификат (только для теста)")
 	fs.BoolVar(&cfg.AllowRemote, "allow-remote", false, "разрешить слушать не только localhost")
+	fs.BoolVar(&cfg.SocksOnly, "socks-only", false, "disable the companion HTTP listener")
 	uiMode := fs.Bool("ui", false, "открыть окно клиента")
 	invite := fs.String("invite", "", "импортировать приглашение и подключиться")
 	trayMode := fs.Bool("tray", false, "открыть только в трее, без окна")
@@ -274,6 +286,7 @@ func runClient(args []string) {
 	}
 }
 
+// GPT: Open the Linux panel through the private launcher when a system route is installed.
 func runClientGUI(cfg client.Config, invite string, trayMode bool) {
 	path := ""
 	if dir, err := os.UserCacheDir(); err == nil {
@@ -296,7 +309,9 @@ func runClientGUI(cfg client.Config, invite string, trayMode bool) {
 	}
 
 	url := "http://127.0.0.1:17893/"
+	panelReady := make(chan string, 1)
 	onReady := func(u string) {
+		panelReady <- u
 		log.Printf("окно клиента: %s", u)
 		if runtime.GOOS == "windows" && !trayMode {
 			desktop.OpenWindow(u)
@@ -311,6 +326,7 @@ func runClientGUI(cfg client.Config, invite string, trayMode bool) {
 
 	// GPT: на Linux показываем иконку в трее с меню вместо простой вкладки браузера.
 	if runtime.GOOS != "windows" {
+		url = <-panelReady
 		if trayMode {
 			log.Printf("клиент работает; остановите Ctrl+C")
 			select {}

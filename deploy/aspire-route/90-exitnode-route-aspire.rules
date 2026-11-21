@@ -1,0 +1,18 @@
+// Restrict the Aspire desktop toggle to its active local user and this one unit.
+polkit.addRule(function (action, subject) {
+    if (action.id === "org.freedesktop.systemd1.manage-units" &&
+        action.lookup("unit") === "exitnode-route.service" &&
+        (action.lookup("verb") === "start" || action.lookup("verb") === "stop") &&
+        subject.user === "sergey" && subject.local && subject.active) {
+        return polkit.Result.YES;
+    }
+});
+
+// Permit only the fixed profile helper for the same active desktop account.
+polkit.addRule(function (action, subject) {
+    if (action.id === "org.freedesktop.policykit.exec" &&
+        action.lookup("program") === "/usr/local/lib/exitnode-route/select-domain" &&
+        subject.user === "sergey" && subject.local && subject.active) {
+        return polkit.Result.YES;
+    }
+});

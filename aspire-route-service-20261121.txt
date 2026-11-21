@@ -1,0 +1,66 @@
+TASK-GUIDE
+Старт по Москве: 21.11.2026 10:00 MSK
+Проект: exitnode. Linux-клиент Aspire, узел windows-pc.
+
+Установлено на Aspire
+Три системные службы exitnode-route, exitnode-route-engine и
+exitnode-route-client. Текущий режим выключен, запуск вручную.
+Файлы установлены в /usr/local/lib/exitnode-route и /etc/exitnode-route.
+Установленная сборка клиента используется только новой службой.
+Действующий VPN и штатный трей агента Aspire оставлены в работе.
+
+Управление на Aspire
+sudo systemctl start exitnode-route.service
+systemctl status exitnode-route.service exitnode-route-engine.service exitnode-route-client.service
+sudo systemctl stop exitnode-route.service
+
+Статус первой службы показывает состояние политики. Для подтверждения
+доступности сайта нужен реальный запрос и подтверждение на стороне Windows.
+Если политика активна, таймаут или ошибка движка/транспорта не выключают её.
+Явная остановка первой службы выключает режим и возвращает обычный DNS и маршруты.
+
+Выбранный домен: speed.cloudflare.com, HTTPS/TCP по IPv4 через windows-pc.
+Выбор хранится в /etc/exitnode-route/route.env. Для нового домена нужно
+также обновить правило разрешений Windows-ключа и перезапустить режим.
+Windows-ключ "Aspire system route" сохранён для следующих запусков.
+Лимиты в панели Windows: только speed.cloudflare.com, 10 МБ общая квота,
+10 МБ в месяц, настройка скорости 128 Кбит/с. Проверена маршрутизация,
+а не точность лимита скорости. На Aspire ключ принадлежит root (0600)
+и передаётся клиенту через systemd LoadCredential.
+Служебный клиент запущен от динамического непривилегированного UID,
+специальным флагом отключён HTTP-слушатель. SOCKS привязан к 127.0.0.1:108,
+доступ непривилегированных пользователей и занятие порта проверены.
+
+Проверено в обычном сеансе Aspire без настройки прокси у curl
+Состояние                           Выбранный сайт       Контрольный example.com
+Маршрут включён                     HTTP 200 через Windows  HTTP 200 через vpn0
+Windows выключен                    HTTP 000                HTTP 200
+Транспорт Aspire остановлен         HTTP 000                HTTP 200
+Движок Aspire убит SIGKILL           отказ свежего DNS       DNS-политика сохраняется
+Движок Aspire перезапущен автоматически  HTTP 200 через Windows
+Режим явно выключен                 HTTP 200 через обычный VPN Aspire
+
+При включённом маршруте DNS дал виртуальный IPv4 198.19.255.250, и
+Windows учёл 6501 Б для первого запроса. Контрольный сайт, выключение
+Windows и остановка транспорта не пополнили счётчик. При SIGKILL
+виртуальный IP получил Network is unreachable; DNS-интерфейс и выбранное
+доменное правило остались активны. NRestarts=1. Повторный ручной запуск
+после остановки также провёл трафик через Windows (6503 Б).
+Два цикла stop восстановили побайтно исходные контрольные суммы
+/etc/hosts, правил IPv4/IPv6 и конфигурации systemd-resolved. Временные
+файлы и таймер приёмки удалены, Windows включён, Aspire VPN активен.
+
+Границы режима
+Одна запись домена, системный DNS, HTTPS/TCP по IPv4. Маршрут DNS
+systemd-resolved распространяется и на поддомены, выделенный сервер их
+отклоняет. Виртуальный IPv6 заблокирован. Собственный DNS приложения,
+сохранённые реальные IP, QUIC, потеря veth и перезапуск системного
+резолвера не входят в гарантию. Клиентский интерфейс ещё не подключён.
+
+Проверки: go test ./..., сборка Linux amd64, bash -n, sing-box check,
+systemd-analyze verify, живой тест Windows и Aspire.
+Исходники: deploy/aspire-route/, cmd/proxy/main.go, internal/client/client.go.
+Документация:
+https://www.freedesktop.org/software/systemd/man/255/systemd.unit.html
+https://www.freedesktop.org/software/systemd/man/255/systemd.exec.html
+https://sing-box.sagernet.org/configuration/inbound/tun/

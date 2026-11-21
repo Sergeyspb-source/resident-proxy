@@ -1,0 +1,16 @@
+[Unit]
+Description=Exitnode selected-domain route policy
+Wants=network-online.target exitnode-route-engine.service exitnode-route-client.service
+After=network-online.target systemd-resolved.service
+Requires=systemd-resolved.service
+Before=exitnode-route-engine.service exitnode-route-client.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+RuntimeDirectory=exitnode-route
+RuntimeDirectoryMode=0700
+UMask=0077
+EnvironmentFile=/etc/exitnode-route/route.env
+ExecStart=/bin/bash /usr/local/lib/exitnode-route/network.sh start
+ExecStopPost=/bin/bash /usr/local/lib/exitnode-route/network.sh stop

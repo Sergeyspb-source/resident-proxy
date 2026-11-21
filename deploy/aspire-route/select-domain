@@ -1,0 +1,4 @@
+#!/bin/sh
+set -eu
+test "$#" -eq 0
+exec /usr/bin/timeout --kill-after=2s 18s /usr/bin/flock -x -w 8 /etc/exitnode-route/.profile.lock /usr/local/lib/exitnode-route/client route-select

@@ -183,6 +183,8 @@
     .hide-sm { display: none; }
     .target { max-width: 150px; }
   }
+#egressMode { color-scheme: dark; background: #171b22; color: inherit; border: 1px solid #343a45; border-radius: 6px; padding: 7px; }
+.build-version { display: block; text-align: right; margin-top: 4px; font-variant-numeric: tabular-nums; }
 </style>
 </head>
 <body>
@@ -203,13 +205,15 @@
   <section id="tab-overview" class="tab active">
     <div class="card">
       <div class="hero">
-        <button id="toggle" class="toggle">Включить</button>
+        <button id="toggle" class="toggle" data-enabled="" disabled>—</button>
         <div>
           <div id="heroTitle" class="heroTitle">Загрузка…</div>
           <div id="heroSub" class="heroSub">—</div>
         </div>
       </div>
     </div>
+
+    <div id="egressOverview" class="note" hidden></div>
 
     <div class="stats">
       <div class="card stat">
@@ -278,6 +282,15 @@
   </section>
 
   <section id="tab-settings" class="tab">
+    <div class="card" id="egressSettings" hidden>
+      <label class="label" id="egressTitle" for="egressMode"></label>
+      <div class="row">
+        <select id="egressMode"><option value="system"></option><option value="direct"></option></select>
+        <button id="egressApply" class="ghost" disabled></button>
+      </div>
+      <div class="note" id="egressNote"></div>
+      <div class="note" id="egressLast" role="status"></div>
+    </div>
     <div class="card">
       <div class="label">Запуск</div>
       <div class="checks">
@@ -328,9 +341,9 @@
   </section>
 
   <footer>
-    <b>Вы всё видите.</b> Панель открыта только на этом компьютере. Пока иконка есть в трее — узел работает;
-    закрытие окна ничего не останавливает, полный выход — через меню иконки.
+    <b>Вы всё видите.</b> Панель открыта только на этом компьютере. <span id="trayNote"></span>
     Каждый пользователь получает свой ключ, свои сайты, квоту и скорость.
+    <span id="buildVersion" class="build-version"></span>
   </footer>
 </div>
 
@@ -338,12 +351,17 @@
 const $ = (id) => document.getElementById(id);
 
 const T = {
-  titleOn: "Узел работает",
-  titleOff: "Узел выключен",
-  subOn: "Трафик идёт через ваш IP. Ниже видно каждое подключение и скорость.",
+  titleOn: "Доступ включён",
+  titleOff: "Доступ выключен",
+  titleUnknown: "Состояние доступа неизвестно",
+  subOn: "Узел готов принимать подключения.",
+  subWaiting: "Подключения недоступны до восстановления связи со шлюзом.",
   subOff: "Программа ничего не пропускает через ваш компьютер.",
-  btnOn: "Выключить",
-  btnOff: "Включить",
+  subUnknown: "Дождитесь ответа панели.",
+  btnOn: "Выключить доступ",
+  btnOff: "Включить доступ",
+  btnUnknown: "—",
+  trayNote: "Иконка в трее показывает, что приложение запущено. Для выхода используйте меню иконки.",
   connected: "Подключено к шлюзу",
   connecting: "Нет связи со шлюзом",
   offline: "Панель не отвечает",
@@ -354,8 +372,6 @@ const T = {
   uptimeHour: (h, m) => h + " ч " + m + " мин",
   saved: "Сохранено",
   copied: "Скопировано",
-  autostartOn: "Автозапуск включён",
-  autostartOff: "Автозапуск выключен",
   noLimit: "без лимита",
   of: " из ",
   users: (n) => n + " " + (n === 1 ? "пользователь" : (n < 5 ? "пользователя" : "пользователей")),
@@ -702,13 +718,44 @@ $("agentInvite").addEventListener("click", async () => {
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 });
 
+// #GPT: отображаем разрешение доступа отдельно от связи со шлюзом.
+function renderAccess(s) {
+  const btn = $("toggle");
+  if (!s) {
+    setStatus("off", T.offline);
+    btn.dataset.enabled = "";
+    btn.textContent = T.btnUnknown;
+    btn.disabled = true;
+    $("heroTitle").textContent = T.titleUnknown;
+    $("heroSub").textContent = T.subUnknown;
+    return;
+  }
+
+  setStatus(s.connected ? "on" : "warn", s.connected ? T.connected : T.connecting);
+  if (btn.dataset.enabled === "") btn.disabled = false;
+  btn.dataset.enabled = s.enabled ? "1" : "0";
+  btn.textContent = s.enabled ? T.btnOn : T.btnOff;
+  btn.classList.toggle("off", !s.enabled);
+  $("heroTitle").textContent = s.enabled ? T.titleOn : T.titleOff;
+  let detail = T.subOff;
+  if (s.enabled) detail = s.connected ? T.subOn : T.subWaiting;
+  $("heroSub").textContent = detail;
+}
+
+// #GPT: при ошибке опроса снимаем устаревший статус готовности.
 async function poll() {
   let s;
   try {
     const res = await fetch("/api/state", { cache: "no-store" });
+    if (!res.ok) {
+      renderAccess(null);
+      window.renderOwnerEgress?.(null);
+      return;
+    }
     s = await res.json();
   } catch (e) {
-    setStatus("off", T.offline);
+    renderAccess(null);
+    window.renderOwnerEgress?.(null);
     return;
   }
 
@@ -716,17 +763,10 @@ async function poll() {
   $("relayAddr").textContent = s.relay || "—";
   $("nodeInfo").textContent = "узел " + (s.name || "—") + ", шлюз " + (s.relay || "—") + ", лимит подключений " + s.max_sessions + ", версия " + (s.version || "—");
   currentVersion = s.version || "";
+  $("buildVersion").textContent = currentVersion ? "v" + currentVersion : "";
 
-  if (!s.connected) setStatus("warn", T.connecting);
-  else if (s.enabled) setStatus("on", T.connected);
-  else setStatus("off", T.btnOff);
-
-  const btn = $("toggle");
-  btn.dataset.enabled = s.enabled ? "1" : "0";
-  btn.textContent = s.enabled ? T.btnOn : T.btnOff;
-  btn.classList.toggle("off", !s.enabled);
-  $("heroTitle").textContent = s.enabled ? T.titleOn : T.titleOff;
-  $("heroSub").textContent = s.enabled ? T.subOn : T.subOff;
+  renderAccess(s);
+  window.renderOwnerEgress?.(s);
 
   $("inRate").textContent = fmtRate(s.in_rate);
   $("outRate").textContent = fmtRate(s.out_rate);
@@ -775,7 +815,7 @@ $("toggle").addEventListener("click", async () => {
     const enabled = btn.dataset.enabled === "1";
     await post("/api/toggle", { enabled: !enabled });
   } finally {
-    setTimeout(() => { btn.disabled = false; }, 400);
+    setTimeout(() => { btn.disabled = btn.dataset.enabled === ""; }, 400);
   }
 });
 
@@ -804,12 +844,13 @@ $("autostart").addEventListener("change", async () => {
   const on = $("autostart").checked;
   const res = await post("/api/autostart", { enabled: on });
   if (!res) { $("autostart").checked = !on; return; }
-  setStatus($("statusDot").classList.contains("on") ? "on" : "warn", on ? T.autostartOn : T.autostartOff);
-  setTimeout(() => poll(), 1200);
+  poll();
 });
 
+$("trayNote").textContent = T.trayNote;
 poll();
 setInterval(poll, 1000);
 </script>
+<script src="/egress.js"></script>
 </body>
 </html>

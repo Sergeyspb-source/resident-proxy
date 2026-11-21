@@ -1,0 +1,61 @@
+TASK-GUIDE
+Старт по Москве: 20.11.2026 22:53 MSK
+Проект: exitnode. Клиент: Aspire, Linux Mint. Узел владельца: windows-pc.
+Этап: временный split DNS в обычном сетевом окружении Aspire.
+
+Схема
+Системный резолвер Aspire направляет ~speed.cloudflare.com в выделенный
+veth exnode-dns. Остальные домены используют прежний DNS, в тесте vpn0.
+sing-box 1.14.4 выдаёт выбранному домену виртуальные A/AAAA. Только этот
+виртуальный диапазон IPv4 направляется в TUN exitnode-r2, а точное имя
+speed.cloudflare.com передаётся в Windows по текущему каналу exitnode.
+Для выбранного домена разрешён HTTPS по TCP. Виртуальный IPv6 блокируется.
+DNS-линк и блокирующие правила живут в отдельной временной службе.
+Файл /etc/hosts не изменялся, маршрут по умолчанию оставался прежним.
+
+DNS-проверка
+speed.cloudflare.com A      198.19.255.250     exnode-dns
+speed.cloudflare.com AAAA   fd00:198:19::2     exnode-dns
+example.com A               реальные IPv4     vpn0
+Запросы выполнены с отключённым DNS-кешем. У Python системный getaddrinfo
+также вернул выбранному имени только тестовый AAAA для IPv6.
+
+Проверки TCP без настроек прокси, curlrc и proxy env
+Состояние                      speed.cloudflare.com       example.com
+Windows включён                HTTP 200, 1024 Б            HTTP 200, 577 Б
+Windows выключен               curl 7, HTTP 000             HTTP 200, 577 Б
+Windows включён снова          HTTP 200, 1024 Б            —
+Движок TUN убит SIGKILL        curl 6, DNS недоступен       HTTP 200, 577 Б
+Движок перезапущен             HTTP 200, 1024 Б            —
+Python http.client             HTTP 200, 1024 Б            —
+
+Счётчик тестового ключа Windows: +6501 Б при первом успехе, +6499 Б
+после возврата Windows, +6499 Б после перезапуска TUN и +6462 Б для
+Python. Контрольный сайт и оба сценария отказа дали прирост 0 Б.
+Журнал sing-box зафиксировал speed.cloudflare.com:443 на SOCKS windows-pc
+и отказ SOCKS при отключении узла. После SIGKILL DNS-линк остался LOWER_UP.
+Запрос без кеша получил Connection refused. Ядро также запретило путь
+к ранее выданным IPv4 и IPv6. После запуска движка маршрут восстановился.
+
+Ограничения
+Пилот использует один заданный в скрипте домен. Правило systemd-resolved
+охватывает и поддомены, для них выделенный сервер возвращает REFUSED.
+Приложения с собственным DNS, соединения по сохранённому реальному IP,
+QUIC, полноценный IPv6-транспорт и потеря самого veth не входят в проверку.
+Автозапуск, постоянная установка и клиентский интерфейс не менялись.
+
+Артефакт: deploy/aspire-route-dns.sh.
+Проверки bash -n, sing-box check, go test ./... прошли.
+Документация:
+https://github.com/SagerNet/sing-box/releases/tag/v1.14.4
+https://www.freedesktop.org/software/systemd/man/255/systemd-resolved.service.html
+https://sing-box.sagernet.org/configuration/shared/listen/
+
+Откат
+В 22:59 MSK systemd по лимиту времени автоматически убрал DNS-правило,
+veth, пространство имён и политики маршрутизации. После остановки
+тестовых движка и клиента контрольные суммы параметров DNS, IPv4/IPv6
+политик и /etc/hosts совпали с исходными. Выбранный домен вновь разрешился
+в реальные адреса через vpn0. Временные файлы и ключ удалены.
+VPN и штатный узел на Aspire активны. Windows включён и подключён,
+остались два исходных ключа.

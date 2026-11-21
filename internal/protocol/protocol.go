@@ -22,8 +22,35 @@ const E2EHost = "e2e.invalid"
 
 // E2EConnect — первый кадр шифрованного потока.
 type E2EConnect struct {
-	Host string `json:"host"`
-	Port int    `json:"port"`
+	Host   string `json:"host"`
+	Port   int    `json:"port"`
+	Action string `json:"action,omitempty"`
+}
+
+const E2EPolicy = "policy"
+
+// Policy is the owner's current traffic allowance for the key authenticated by inner TLS.
+type Policy struct {
+	Version    int                `json:"version"`
+	Owner      string             `json:"owner"`
+	Domains    []string           `json:"domains"`
+	DayBytes   int64              `json:"day_bytes"`
+	DayUsed    int64              `json:"day_used"`
+	MonthBytes int64              `json:"month_bytes"`
+	MonthUsed  int64              `json:"month_used"`
+	RateKBps   int64              `json:"rate_kbps"`
+	EgressMode string             `json:"egress_mode,omitempty"`
+	LastEgress *EgressObservation `json:"last_egress,omitempty"`
+}
+
+// EgressObservation describes the Windows route selected for an attempted destination.
+type EgressObservation struct {
+	Host      string    `json:"host"`
+	Port      int       `json:"port"`
+	Kind      string    `json:"kind"`
+	Interface string    `json:"interface,omitempty"`
+	Outcome   string    `json:"outcome"`
+	CheckedAt time.Time `json:"checked_at"`
 }
 
 // Коды ошибок совпадают с кодами SOCKS5 (RFC 1928), чтобы шлюз отдавал клиенту

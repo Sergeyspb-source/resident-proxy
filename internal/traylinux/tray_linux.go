@@ -12,6 +12,9 @@ import (
 	"sync"
 
 	"github.com/godbus/dbus/v5"
+
+	"exitnode/internal/buildinfo"
+	"exitnode/internal/versionicon"
 	"github.com/godbus/dbus/v5/prop"
 )
 
@@ -162,11 +165,13 @@ type pixmap struct {
 	Data   []byte
 }
 
+// GPT: Add the current build badge to the existing Linux tray image.
 func iconPixmaps() []pixmap {
 	img, err := png.Decode(bytes.NewReader(iconPNG))
 	if err != nil {
 		return nil
 	}
+	img = versionicon.Badge(img, buildinfo.Version)
 	b := img.Bounds()
 	w, h := b.Dx(), b.Dy()
 	data := make([]byte, w*h*4)
@@ -186,6 +191,7 @@ func iconPixmaps() []pixmap {
 
 // Run СЂРµРіРёСЃС‚СЂРёСЂСѓРµС‚ РёРєРѕРЅРєСѓ Рё РјРµРЅСЋ. Р’РѕР·РІСЂР°С‰Р°РµС‚ С„СѓРЅРєС†РёСЋ РѕСЃС‚Р°РЅРѕРІРєРё.
 func Run(opts Options, logger *log.Logger) (func(), error) {
+	opts.Title += " v" + buildinfo.Version
 	if logger == nil {
 		logger = log.Default()
 	}

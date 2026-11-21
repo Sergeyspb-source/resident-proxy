@@ -1,0 +1,62 @@
+TASK-GUIDE
+Старт по Москве: 20.11.2026 22:38 MSK
+Проверка на Aspire: 20.11.2026 22:41–22:43 MSK
+
+Сценарий
+Linux Mint на Aspire, exitnode-client 0.0.20, агент Windows windows-pc 0.0.20.
+sing-box 1.14.4 из официального релиза. SHA-256 архива сверена с данными GitHub.
+Конфиг: deploy/aspire-route-smoke.json. Проверка sing-box check прошла.
+Временный TUN exitnode-test и DNS были только в сетевом пространстве теста.
+DNS вернул 198.18.0.2 для speed.cloudflare.com. ip route get показал выход
+к этому адресу через exitnode-test. Для остальных доменов использовался
+обычный резолвер Aspire (127.0.0.53), выход — обычная маршрутизация Aspire.
+Windows-ключ ограничивался speed.cloudflare.com, квотой 1 МБ и скоростью 64 Кбит/с.
+
+Результаты
+Запрос                                           HTTP  Тело      Счётчик Windows
+speed.cloudflare.com, Windows включён             200  1024 Б    +6502 Б
+example.com, Windows включён                      200   577 Б        0 Б
+speed.cloudflare.com, Windows выключен            000     0 Б        0 Б
+example.com, Windows выключен                     200   577 Б        0 Б
+speed.cloudflare.com, Windows вновь включён       200  1024 Б    +6492 Б
+speed.cloudflare.com, Python http.client          200  1024 Б    +6470 Б
+
+curl запускался без curlrc и переменных прокси, с --noproxy '*' и -4.
+Второй клиент — Python http.client.HTTPSConnection, без настройки прокси.
+TLS проверялся стандартными средствами обоих клиентов.
+Windows записал три сессии к speed.cloudflare.com:443 под тестовым ключом.
+Счётчик включает байты протоколов и TLS, поэтому больше тела ответа.
+При выключенном агенте sing-box зарегистрировал socks5: request rejected, code=5,
+curl завершился с SSL_ERROR_SYSCALL (35). В журнале нет перехода выбранного
+соединения на прямой маршрут; контрольный сайт прошёл через aspire-direct.
+Доступность и IP контрольного сайта совпали с запросом вне тестового пространства.
+
+Повтор теста
+1. В отдельном временном каталоге Aspire запустить sing-box 1.14.4 с этим
+   конфигом. Он создаёт netns.pid в рабочем каталоге.
+2. Запустить exitnode-client с TLS на 127.0.0.1:19080. Использовать отдельный
+   ключ Windows с разрешением только speed.cloudflare.com и хранить ключ в
+   файле с правами 600.
+3. Войти в тестовое пространство через nsenter. В отдельном пространстве
+   монтирования подставить resolv.conf с nameserver 172.19.0.2. Выполнить curl
+   как обычный пользователь внутри пространства. Для выбранного сайта
+   использован путь /__down?bytes=1024, для контрольного — https://example.com/.
+4. Повторить при выключенном Windows-узле и после его включения, сверив
+   счётчики ключа и журналы. Удалить временный ключ и остановить тестовые процессы.
+
+Объём проверки
+Подтверждена прозрачная маршрутизация TCP с системным DNS для приложений
+в тестовом пространстве Aspire. Общесистемную установку, выход из строя
+движка, IPv6, QUIC и приложения с собственным зашифрованным DNS отдельно
+не проверяли. В конфиге для выбранного домена UDP отклоняется.
+
+После проверки
+Windows enabled=true, connected=true, осталось два исходных ключа.
+Временный ключ отозван. Временные службы и файлы Aspire удалены, порт
+19080 свободен. vpn-client.service и штатный exitnode.service активны,
+маршрут к шлюзу и системный resolv.conf сохранены. go test ./... прошёл.
+
+Источники:
+https://github.com/SagerNet/sing-box/releases/tag/v1.14.4
+https://sing-box.sagernet.org/configuration/network-namespace/unshare/
+https://sing-box.sagernet.org/configuration/inbound/tun/

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"exitnode/internal/monitor"
+	"exitnode/internal/protocol"
 	"exitnode/internal/update"
 )
 
@@ -21,15 +22,18 @@ var indexHTML []byte
 
 // Info — состояние агента, которое панель показывает в шапке.
 type Info struct {
-	Name         string
-	Relay        string
-	Connected    bool
-	Enabled      bool
-	Since        time.Time
-	MaxSessions  int
-	PublicSocks  string
-	Version      string
-	CanAutostart bool
+	Name            string
+	Relay           string
+	Connected       bool
+	Enabled         bool
+	Since           time.Time
+	MaxSessions     int
+	PublicSocks     string
+	Version         string
+	CanAutostart    bool
+	EgressMode      string
+	EgressSupported bool
+	LastEgress      *protocol.EgressObservation
 }
 
 // KeyView — пользователь (ключ) с его лимитами и расходом.
@@ -60,6 +64,7 @@ type KeyLimits struct {
 type Controller interface {
 	Info() Info
 	SetEnabled(bool)
+	SetEgressMode(string) error
 	KillAll()
 	Keys() []KeyView
 	AddKey(string) (KeyView, error)
@@ -72,26 +77,29 @@ type Controller interface {
 }
 
 type state struct {
-	Name         string                    `json:"name"`
-	Relay        string                    `json:"relay"`
-	Connected    bool                      `json:"connected"`
-	Enabled      bool                      `json:"enabled"`
-	Uptime       int64                     `json:"uptime"`
-	MaxSessions  int                       `json:"max_sessions"`
-	Keys         []KeyView                 `json:"keys"`
-	Autostart    bool                      `json:"autostart"`
-	CanAutostart bool                      `json:"can_autostart"`
-	Version      string                    `json:"version"`
-	Sessions     []monitor.SessionSnapshot `json:"sessions"`
-	InRate       float64                   `json:"in_rate"`
-	OutRate      float64                   `json:"out_rate"`
-	TotalIn      uint64                    `json:"total_in"`
-	TotalOut     uint64                    `json:"total_out"`
-	History      []float64                 `json:"history"`
-	CPUProc      float64                   `json:"cpu_proc"`
-	RSSMB        float64                   `json:"rss_mb"`
-	CPUSys       float64                   `json:"cpu_sys"`
-	MemSys       float64                   `json:"mem_sys"`
+	EgressMode      string                      `json:"egress_mode"`
+	EgressSupported bool                        `json:"egress_supported"`
+	LastEgress      *protocol.EgressObservation `json:"last_egress,omitempty"`
+	Name            string                      `json:"name"`
+	Relay           string                      `json:"relay"`
+	Connected       bool                        `json:"connected"`
+	Enabled         bool                        `json:"enabled"`
+	Uptime          int64                       `json:"uptime"`
+	MaxSessions     int                         `json:"max_sessions"`
+	Keys            []KeyView                   `json:"keys"`
+	Autostart       bool                        `json:"autostart"`
+	CanAutostart    bool                        `json:"can_autostart"`
+	Version         string                      `json:"version"`
+	Sessions        []monitor.SessionSnapshot   `json:"sessions"`
+	InRate          float64                     `json:"in_rate"`
+	OutRate         float64                     `json:"out_rate"`
+	TotalIn         uint64                      `json:"total_in"`
+	TotalOut        uint64                      `json:"total_out"`
+	History         []float64                   `json:"history"`
+	CPUProc         float64                     `json:"cpu_proc"`
+	RSSMB           float64                     `json:"rss_mb"`
+	CPUSys          float64                     `json:"cpu_sys"`
+	MemSys          float64                     `json:"mem_sys"`
 }
 
 type handler struct {
@@ -113,8 +121,10 @@ func Serve(addr string, reg *monitor.Registry, ctrl Controller, sys *monitor.Sys
 	h := &handler{reg: reg, sys: sys, ctrl: ctrl}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", h.index)
+	mux.HandleFunc("/egress.js", serveEgressJS)
 	mux.HandleFunc("/api/state", h.getState)
 	mux.HandleFunc("/api/toggle", h.toggle)
+	mux.HandleFunc("/api/egress", h.setEgressMode)
 	mux.HandleFunc("/api/kill", h.kill)
 	mux.HandleFunc("/api/keys/add", h.addKey)
 	mux.HandleFunc("/api/keys/remove", h.removeKey)
@@ -136,7 +146,7 @@ func Serve(addr string, reg *monitor.Registry, ctrl Controller, sys *monitor.Sys
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("Referrer-Policy", "no-referrer")
-		w.Header().Set("Content-Security-Policy", "default-src 'self'; connect-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'")
+		w.Header().Set("Content-Security-Policy", "default-src 'self'; connect-src 'self'; style-src 'unsafe-inline'; script-src 'self' 'unsafe-inline'")
 		mux.ServeHTTP(w, r)
 	})
 
@@ -206,26 +216,29 @@ func (h *handler) getState(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp := state{
-		Name:         info.Name,
-		Relay:        info.Relay,
-		Connected:    info.Connected,
-		Enabled:      info.Enabled,
-		Uptime:       int64(time.Since(info.Since).Seconds()),
-		MaxSessions:  info.MaxSessions,
-		Keys:         keys,
-		Autostart:    h.ctrl.Autostart(),
-		CanAutostart: info.CanAutostart,
-		Version:      info.Version,
-		Sessions:     snap.Sessions,
-		InRate:       snap.InRate,
-		OutRate:      snap.OutRate,
-		TotalIn:      snap.TotalIn,
-		TotalOut:     snap.TotalOut,
-		History:      snap.History,
-		CPUProc:      sys.CPUProc,
-		RSSMB:        sys.RSSMB,
-		CPUSys:       sys.CPUSys,
-		MemSys:       sys.MemSys,
+		EgressMode:      info.EgressMode,
+		EgressSupported: info.EgressSupported,
+		LastEgress:      info.LastEgress,
+		Name:            info.Name,
+		Relay:           info.Relay,
+		Connected:       info.Connected,
+		Enabled:         info.Enabled,
+		Uptime:          int64(time.Since(info.Since).Seconds()),
+		MaxSessions:     info.MaxSessions,
+		Keys:            keys,
+		Autostart:       h.ctrl.Autostart(),
+		CanAutostart:    info.CanAutostart,
+		Version:         info.Version,
+		Sessions:        snap.Sessions,
+		InRate:          snap.InRate,
+		OutRate:         snap.OutRate,
+		TotalIn:         snap.TotalIn,
+		TotalOut:        snap.TotalOut,
+		History:         snap.History,
+		CPUProc:         sys.CPUProc,
+		RSSMB:           sys.RSSMB,
+		CPUSys:          sys.CPUSys,
+		MemSys:          sys.MemSys,
 	}
 	if resp.Sessions == nil {
 		resp.Sessions = []monitor.SessionSnapshot{}

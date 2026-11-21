@@ -5,6 +5,7 @@ package client
 
 import (
 	"bufio"
+	"context"
 	"crypto/sha256"
 	"crypto/tls"
 	"encoding/binary"
@@ -34,6 +35,7 @@ type Config struct {
 	ServerName  string
 	Insecure    bool
 	AllowRemote bool
+	SocksOnly   bool
 }
 
 type State struct {
@@ -64,6 +66,7 @@ func NewManager(logger *log.Logger) *Manager {
 	return &Manager{log: logger}
 }
 
+// GPT: Allow a dedicated tunnel service to use SOCKS without exposing an HTTP listener.
 func (m *Manager) Start(cfg Config) error {
 	if !cfg.AllowRemote {
 		host, _, err := net.SplitHostPort(cfg.Listen)
@@ -81,27 +84,33 @@ func (m *Manager) Start(cfg Config) error {
 		return err
 	}
 
-	// GPT: второй слушатель — HTTP-прокси для системных настроек Windows:
-	// WinINET не умеет SOCKS5, а HTTP CONNECT умеет.
-	if cfg.HTTPListen == "" {
-		addr, err := freeHTTPListen()
+	var hln net.Listener
+	if cfg.SocksOnly {
+		cfg.HTTPListen = ""
+	} else {
+		// WinINET needs an HTTP listener for system proxy settings.
+		if cfg.HTTPListen == "" {
+			addr, err := freeHTTPListen()
+			if err != nil {
+				ln.Close()
+				return err
+			}
+			cfg.HTTPListen = addr
+		}
+		hln, err = net.Listen("tcp", cfg.HTTPListen)
 		if err != nil {
 			ln.Close()
 			return err
 		}
-		cfg.HTTPListen = addr
-	}
-	hln, err := net.Listen("tcp", cfg.HTTPListen)
-	if err != nil {
-		ln.Close()
-		return err
 	}
 
 	m.mu.Lock()
 	if m.ln != nil {
 		m.mu.Unlock()
 		ln.Close()
-		hln.Close()
+		if hln != nil {
+			hln.Close()
+		}
 		return errors.New("клиент уже подключён")
 	}
 	m.cfg = cfg
@@ -114,9 +123,11 @@ func (m *Manager) Start(cfg Config) error {
 	m.mu.Unlock()
 
 	m.log.Printf("локальный SOCKS5 на %s, шлюз %s", cfg.Listen, cfg.Server)
-	m.log.Printf("HTTP-прокси для системы на %s", cfg.HTTPListen)
 	go m.acceptLoop(ln)
-	go m.acceptHTTP(hln)
+	if hln != nil {
+		m.log.Printf("HTTP-прокси для системы на %s", cfg.HTTPListen)
+		go m.acceptHTTP(hln)
+	}
 	return nil
 }
 
@@ -203,20 +214,26 @@ func (m *Manager) acceptHTTP(ln net.Listener) {
 }
 
 // dialTarget открывает шифрованный туннель до цели на узле выхода.
+// #GPT: подтверждаем ключ узла по внутреннему TLS до отправки адреса сайта.
 func (m *Manager) dialTarget(cfg Config, host string, port int) (net.Conn, error) {
-	up, err := dialUpstream(cfg)
+	up, err := dialUpstream(context.Background(), cfg)
 	if err != nil {
 		return nil, err
 	}
-	sec, err := secure.NewConn(up, secure.DeriveKey(cfg.Key))
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	deadline, _ := ctx.Deadline()
+	_ = up.SetDeadline(deadline)
+	sec, err := secure.Client(ctx, up, cfg.Key)
 	if err != nil {
+		up.Close()
+		return nil, fmt.Errorf("внутренний TLS с узлом: %w", err)
+	}
+	if err := protocol.WriteJSON(sec, protocol.E2EConnect{Host: host, Port: port}); err != nil {
 		up.Close()
 		return nil, err
 	}
-	if err := protocol.WriteJSON(sec, protocol.E2EConnect{Host: host, Port: port}); err != nil {
-		sec.Close()
-		return nil, err
-	}
+	_ = up.SetDeadline(time.Time{})
 	return &countConn{
 		Conn:    sec,
 		onRead:  func(n int) { m.out.Add(uint64(n)) },
@@ -410,7 +427,8 @@ func Run(cfg Config, logger *log.Logger) error {
 // dialUpstream проходит SOCKS5-рукопожатие со шлюзом. Вместо пароля
 // отправляется sha256 ключа, а целью указывается фиктивный адрес:
 // шлюз не должен знать ни ключ, ни настоящий сайт.
-func dialUpstream(cfg Config) (net.Conn, error) {
+// GPT: Bound lookup, TLS and SOCKS negotiation when fetching owner policy.
+func dialUpstream(ctx context.Context, cfg Config) (net.Conn, error) {
 	if len(cfg.Key) > 255 {
 		return nil, errors.New("ключ слишком длинный")
 	}
@@ -431,13 +449,14 @@ func dialUpstream(cfg Config) (net.Conn, error) {
 			}
 			serverName = host
 		}
-		c, err = tls.DialWithDialer(&d, "tcp", cfg.Server, &tls.Config{
+		td := tls.Dialer{NetDialer: &d, Config: &tls.Config{
 			MinVersion:         tls.VersionTLS13,
 			ServerName:         serverName,
 			InsecureSkipVerify: cfg.Insecure,
-		})
+		}}
+		c, err = td.DialContext(ctx, "tcp", cfg.Server)
 	} else {
-		c, err = d.Dial("tcp", cfg.Server)
+		c, err = d.DialContext(ctx, "tcp", cfg.Server)
 	}
 	if err != nil {
 		return nil, err
@@ -449,7 +468,11 @@ func dialUpstream(cfg Config) (net.Conn, error) {
 		}
 	}()
 
-	_ = c.SetDeadline(time.Now().Add(20 * time.Second))
+	deadline := time.Now().Add(20 * time.Second)
+	if limit, ok := ctx.Deadline(); ok && limit.Before(deadline) {
+		deadline = limit
+	}
+	_ = c.SetDeadline(deadline)
 	if _, err := c.Write([]byte{5, 1, 2}); err != nil {
 		return nil, err
 	}

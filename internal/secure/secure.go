@@ -1,106 +1,102 @@
-// Пакет secure — шифрованный поток поверх соединения с relay.
-// Ключ выводится из ключа доступа, которого у шлюза нет: он видит только хеш.
+// Package secure establishes mutual TLS between a client and an exit agent.
 package secure
 
 import (
-	"crypto/aes"
-	"crypto/cipher"
+	"context"
+	"crypto/ed25519"
+	"crypto/hkdf"
 	"crypto/rand"
 	"crypto/sha256"
-	"encoding/binary"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
-	"io"
+	"math/big"
 	"net"
-	"sync"
+	"time"
 )
 
-const maxFrame = 64 << 10
+const innerProtocol = "exitnode-e2e/2"
 
-// DeriveKey превращает ключ доступа в 32-байтный ключ AES.
-func DeriveKey(value string) []byte {
-	sum := sha256.Sum256([]byte("exitnode-e2e-v1|" + value))
-	return sum[:]
-}
-
-// Conn шифрует каждый кадр AES-256-GCM.
-type Conn struct {
-	net.Conn
-	aead cipher.AEAD
-	wmu  sync.Mutex
-	rbuf []byte
-}
-
-func NewConn(c net.Conn, key []byte) (*Conn, error) {
-	block, err := aes.NewCipher(key)
+// #GPT: authenticate the agent using the invitation secret before sending the target.
+func Client(ctx context.Context, conn net.Conn, invitation string) (*tls.Conn, error) {
+	cfg, err := config(invitation, "client", "agent")
 	if err != nil {
 		return nil, err
 	}
-	aead, err := cipher.NewGCM(block)
+	// The peer has no public CA certificate. VerifyConnection always checks the pinned key.
+	cfg.InsecureSkipVerify = true
+	secure := tls.Client(conn, cfg)
+	if err := secure.HandshakeContext(ctx); err != nil {
+		return nil, err
+	}
+	return secure, nil
+}
+
+// #GPT: require the peer to prove possession of the client key in a fresh handshake.
+func Server(ctx context.Context, conn net.Conn, invitation string) (*tls.Conn, error) {
+	cfg, err := config(invitation, "agent", "client")
 	if err != nil {
 		return nil, err
 	}
-	return &Conn{Conn: c, aead: aead}, nil
+	cfg.ClientAuth = tls.RequireAnyClientCert
+	secure := tls.Server(conn, cfg)
+	if err := secure.HandshakeContext(ctx); err != nil {
+		return nil, err
+	}
+	return secure, nil
 }
 
-func (c *Conn) Write(p []byte) (int, error) {
-	c.wmu.Lock()
-	defer c.wmu.Unlock()
-
-	total := 0
-	for len(p) > 0 {
-		n := len(p)
-		if n > 32<<10 {
-			n = 32 << 10
-		}
-		chunk := p[:n]
-
-		nonce := make([]byte, c.aead.NonceSize())
-		if _, err := rand.Read(nonce); err != nil {
-			return total, err
-		}
-		ct := c.aead.Seal(nil, nonce, chunk, nil)
-
-		var hdr [4]byte
-		binary.BigEndian.PutUint32(hdr[:], uint32(len(nonce)+len(ct)))
-		if _, err := c.Conn.Write(hdr[:]); err != nil {
-			return total, err
-		}
-		if _, err := c.Conn.Write(nonce); err != nil {
-			return total, err
-		}
-		if _, err := c.Conn.Write(ct); err != nil {
-			return total, err
-		}
-		total += n
-		p = p[n:]
+// #GPT: pin the opposite role's key and disable resumption so each stream authenticates afresh.
+func config(invitation, localRole, peerRole string) (*tls.Config, error) {
+	localKey, err := identity(invitation, localRole)
+	if err != nil {
+		return nil, err
 	}
-	return total, nil
+	peerKey, err := identity(invitation, peerRole)
+	if err != nil {
+		return nil, err
+	}
+	localPub := localKey.Public().(ed25519.PublicKey)
+	expectedPeer := peerKey.Public().(ed25519.PublicKey)
+	template := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		NotBefore:    time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC),
+		NotAfter:     time.Date(2100, 1, 1, 0, 0, 0, 0, time.UTC),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+	}
+	cert, err := x509.CreateCertificate(rand.Reader, template, template, localPub, localKey)
+	if err != nil {
+		return nil, err
+	}
+	return &tls.Config{
+		MinVersion: tls.VersionTLS13,
+		MaxVersion: tls.VersionTLS13,
+		NextProtos: []string{innerProtocol},
+		Certificates: []tls.Certificate{
+			{Certificate: [][]byte{cert}, PrivateKey: localKey},
+		},
+		SessionTicketsDisabled: true,
+		VerifyConnection: func(state tls.ConnectionState) error {
+			if state.NegotiatedProtocol != innerProtocol || len(state.PeerCertificates) != 1 {
+				return errors.New("exitnode: invalid inner TLS peer")
+			}
+			peer, ok := state.PeerCertificates[0].PublicKey.(ed25519.PublicKey)
+			if !ok || !expectedPeer.Equal(peer) {
+				return errors.New("exitnode: inner TLS peer key mismatch")
+			}
+			return nil
+		},
+	}, nil
 }
 
-func (c *Conn) Read(p []byte) (int, error) {
-	if len(c.rbuf) == 0 {
-		var hdr [4]byte
-		if _, err := io.ReadFull(c.Conn, hdr[:]); err != nil {
-			return 0, err
-		}
-		size := int(binary.BigEndian.Uint32(hdr[:]))
-		if size < c.aead.NonceSize()+c.aead.Overhead() || size > maxFrame {
-			return 0, errors.New("secure: неверный размер кадра")
-		}
-		frame := make([]byte, size)
-		if _, err := io.ReadFull(c.Conn, frame); err != nil {
-			return 0, err
-		}
-		nonce := frame[:c.aead.NonceSize()]
-		ct := frame[c.aead.NonceSize():]
-		pt, err := c.aead.Open(nil, nonce, ct, nil)
-		if err != nil {
-			return 0, err
-		}
-		c.rbuf = pt
+// #GPT: derive distinct identities from the full invitation, independently of the relay routing hash.
+func identity(invitation, role string) (ed25519.PrivateKey, error) {
+	if invitation == "" {
+		return nil, errors.New("exitnode: empty invitation secret")
 	}
-
-	n := copy(p, c.rbuf)
-	c.rbuf = c.rbuf[n:]
-	return n, nil
+	seed, err := hkdf.Key(sha256.New, []byte(invitation), nil, innerProtocol+"/identity/"+role, ed25519.SeedSize)
+	if err != nil {
+		return nil, err
+	}
+	return ed25519.NewKeyFromSeed(seed), nil
 }

@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"exitnode/internal/buildinfo"
 	"exitnode/internal/client"
 	"exitnode/internal/sysproxy"
 )
@@ -195,6 +196,7 @@ func freeListen() (string, error) {
 }
 
 type stateView struct {
+	Version        string `json:"version"`
 	Running        bool   `json:"running"`
 	Listen         string `json:"listen"`
 	Server         string `json:"server"`
@@ -216,6 +218,7 @@ func (a *App) state() stateView {
 	last := a.last
 	a.mu.Unlock()
 	return stateView{
+		Version:        buildinfo.Version,
 		Running:        st.Running,
 		Listen:         st.Listen,
 		Server:         st.Server,
@@ -231,6 +234,7 @@ func (a *App) state() stateView {
 	}
 }
 
+// GPT: Serve the optional system route API behind a private desktop launcher.
 func Serve(addr string, app *App, logger *log.Logger, onReady func(url string)) error {
 	if !isLoopback(addr) {
 		return errors.New("окно клиента должно слушать только 127.0.0.1")
@@ -311,12 +315,14 @@ func Serve(addr string, app *App, logger *log.Logger, onReady func(url string)) 
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("Referrer-Policy", "no-referrer")
-		w.Header().Set("Content-Security-Policy", "default-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'")
+		w.Header().Set("Content-Security-Policy", "default-src 'self'; style-src 'unsafe-inline'; script-src 'self' 'unsafe-inline'")
 		mux.ServeHTTP(w, r)
 	})
 
+	panelURL, cleanup := bindSystemRoute(mux, "http://"+displayAddr(ln.Addr().String())+"/", logger)
+	defer cleanup()
 	if onReady != nil {
-		onReady("http://" + displayAddr(ln.Addr().String()) + "/")
+		onReady(panelURL)
 	}
 	srv := &http.Server{
 		Handler:           guard,

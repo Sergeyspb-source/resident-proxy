@@ -1,0 +1,49 @@
+TASK-GUIDE
+Старт по Москве: 20.11.2026 22:44 MSK
+Проект: exitnode. Узел: windows-pc. Клиент: Aspire, Linux Mint.
+Этап: временный тест в основном сетевом окружении Aspire.
+
+Что изменялось во время теста
+- sing-box 1.14.4 с TUN exitnode-r1, без управления системным DNS и default route.
+- Два временных сопоставления speed.cloudflare.com в /etc/hosts. IPv4 уходит
+  через выделенную таблицу 29443, IPv6 получает явный отказ.
+- Правила с приоритетами 92–93 относятся только к тестовым адресам и стоят
+  перед правилом 100 действующего VPN. SOCKS принимает только HTTPS TCP к
+  этому тестовому адресу и передаёт Windows исходное имя сайта.
+- Трёхминутный systemd-unit держит правила отдельно от процесса движка.
+  Его ExecStopPost удаляет только записи и маршруты пилота.
+
+Проверки в обычном сеансе Aspire, без параметров прокси, curlrc и proxy env
+Состояние                   speed.cloudflare.com       example.com
+Windows включён             HTTP 200, 1024 Б            HTTP 200, 577 Б
+Windows выключен            curl 7, HTTP 000             HTTP 200, 577 Б
+Windows включён снова       HTTP 200, 1024 Б            —
+Движок убит SIGKILL         curl 7, HTTP 000             HTTP 200, 577 Б
+
+Windows учёл 6497 Б при первом успехе и 6497 Б после восстановления.
+Контрольный сайт, отказ Windows и отказ TUN не пополнили счётчик.
+При отключении Windows журнал sing-box показал SOCKS5 reject, code=5.
+После SIGKILL интерфейс пропал, системный резолвер сохранил тестовое
+сопоставление, IP-проверки обоих адресов показали Network is unreachable.
+Для example.com ядро показало обычный маршрут Aspire через vpn0, таблица 4242.
+Маршрут к VPS, штатные SSH и VPN работали в ходе теста.
+
+Объём проверки
+Проверен один выбранный домен через IPv4 и HTTPS/TCP. IPv6 выбранного
+домена заблокирован. Сопоставление временное и статическое. Приложения
+с собственным DNS или ранее сохранённым настоящим IP этим тестом не
+охватываются. Автозапуск, динамические DNS-правила и UI ещё не внедрены.
+
+Артефакт: deploy/aspire-route-host.sh. bash -n, sing-box check, go test ./...
+прошли. Официальные источники:
+https://github.com/SagerNet/sing-box/releases/tag/v1.14.4
+https://sing-box.sagernet.org/configuration/route/rule_action/
+https://www.man7.org/linux/man-pages/man8/ip-rule.8.html
+
+Откат 22:51 MSK
+systemd остановил пилот по лимиту времени и запустил ExecStopPost.
+Хеши /etc/hosts и обоих наборов ip rule совпали с исходными.
+Таблица 29443 и TUN удалены, speed.cloudflare.com снова получил реальный адрес.
+Временный SOCKS-порт, процессы и файлы удалены. Тестовый ключ отозван.
+Windows включён и подключён, осталось два исходных ключа.
+vpn-client.service и штатный exitnode.service на Aspire активны.

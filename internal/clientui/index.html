@@ -65,6 +65,9 @@
   footer { color: var(--muted); font-size: 10.5px; margin-top: 14px; line-height: 1.5; }
 
   @media (max-width: 560px) { .grid { grid-template-columns: 1fr; } }
+#routeDomain { color-scheme: dark; color: inherit; background: #171b22; border: 1px solid #343a45; border-radius: 6px; padding: 6px; }
+#routeDomainPicker[hidden] { display: none; }
+.build-version { display: block; text-align: right; margin-top: 4px; font-variant-numeric: tabular-nums; }
 </style>
 </head>
 <body>
@@ -74,6 +77,29 @@
     <div class="who">локальный прокси</div>
     <div class="status"><span id="dot" class="dot"></span><span id="statusText">не подключён</span></div>
   </header>
+
+  <section class="card" id="systemRouteCard" aria-labelledby="routeTitle" hidden>
+    <div class="row"><div class="label" id="routeTitle"></div><span id="routeStatus" class="note" role="status"></span></div>
+    <div id="routePath" class="big"></div>
+    <div class="actions">
+      <button id="routeToggle" class="primary"></button>
+      <button id="routeProbe" class="ghost"></button>
+    </div>
+    <div id="routeResult" class="note" role="status" hidden></div>
+    <div id="routePersistence" class="note" hidden></div>
+    <div class="actions">
+      <input id="routeInviteFile" type="file" accept=".exitnode,.json,application/json" hidden>
+      <button id="routeInvite" class="ghost"></button>
+    </div>
+    <div id="routeTerms" class="note" hidden></div>
+    <div id="routeEgress" class="note" hidden></div>
+    <div id="routeDomainPicker" class="actions" hidden>
+      <label id="routeDomainLabel" for="routeDomain"></label>
+      <select id="routeDomain"></select>
+      <button id="routeApply" class="ghost"></button>
+    </div>
+    <div id="routeError" class="err" role="alert" hidden></div>
+  </section>
 
   <div class="card">
     <div class="row"><div class="label">Подключение</div><span id="savedHint" class="note" style="margin:0"></span></div>
@@ -127,6 +153,7 @@
   <footer>
     Ключ равносилен паролю: не пересылайте его в открытых чатах. Программа не требует прав администратора.
     Закрытие окна не останавливает прокси — он работает, пока иконка в трее; полный выход — через меню иконки.
+    <span id="buildVersion" class="build-version"></span>
   </footer>
 </div>
 
@@ -146,11 +173,11 @@ const dur = (s) => {
   return m < 60 ? m + " мин" : Math.floor(m / 60) + " ч " + (m % 60) + " мин";
 };
 
-async function post(path, body) {
+async function post(path, body, extraHeaders = {}) {
   try {
     const res = await fetch(path, {
       method: "POST",
-      headers: { "Content-Type": "application/json", "X-Requested-With": "exitnode" },
+      headers: { "Content-Type": "application/json", "X-Requested-With": "exitnode", ...extraHeaders },
       body: JSON.stringify(body || {}),
     });
     if (!res.ok) return { error: (await res.text()).trim() || "ошибка" };
@@ -174,6 +201,7 @@ async function poll() {
   }
 
   $("dot").className = "dot " + (s.running ? "on" : "off");
+  $("buildVersion").textContent = s.version ? "v" + s.version : "";
   $("statusText").textContent = s.running ? "подключено" : "не подключён";
   $("listen").textContent = s.running ? s.listen : "—";
   const port = (s.listen || "127.0.0.1:1080").split(":").pop() || "1080";
@@ -253,5 +281,6 @@ $("invite").addEventListener("change", async () => {
 poll();
 setInterval(poll, 1000);
 </script>
+<script src="/system-route.js"></script>
 </body>
 </html>

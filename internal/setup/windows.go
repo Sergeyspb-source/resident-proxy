@@ -17,6 +17,7 @@ import (
 	"golang.org/x/sys/windows/registry"
 
 	"exitnode/internal/buildinfo"
+	"exitnode/internal/versionicon"
 )
 
 const (
@@ -180,11 +181,17 @@ func desktopDir() string {
 	return filepath.Join(home, "Desktop")
 }
 
+// GPT: New shortcuts use a build-specific icon and description, with a stable shortcut name.
 func makeShortcut(lnk, target, args string) error {
+	icon := filepath.Join(filepath.Dir(target), "exitnode-"+buildinfo.Version+".ico")
+	if err := os.WriteFile(icon, versionicon.ICO(buildinfo.Version), 0o644); err != nil {
+		return fmt.Errorf("shortcut icon: %w", err)
+	}
 	ps := fmt.Sprintf(
-		`$s=(New-Object -ComObject WScript.Shell).CreateShortcut('%s'); $s.TargetPath='%s'; $s.Arguments='%s'; $s.IconLocation='%s,0'; $s.Save()`,
-		psQuote(lnk), psQuote(target), psQuote(args), psQuote(target))
+		`$s=(New-Object -ComObject WScript.Shell).CreateShortcut('%s'); $s.TargetPath='%s'; $s.Arguments='%s'; $s.IconLocation='%s,0'; $s.Description='%s'; $s.Save()`,
+		psQuote(lnk), psQuote(target), psQuote(args), psQuote(icon), psQuote("Exitnode v"+buildinfo.Version))
 	cmd := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", ps)
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("ярлык: %v (%s)", err, strings.TrimSpace(string(out)))

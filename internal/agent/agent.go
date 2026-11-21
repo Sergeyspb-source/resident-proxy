@@ -19,13 +19,13 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-	"syscall"
 	"time"
 
 	"github.com/hashicorp/yamux"
 	"golang.org/x/time/rate"
 
 	"exitnode/internal/desktop"
+	"exitnode/internal/egress"
 	"exitnode/internal/limits"
 	"exitnode/internal/monitor"
 	"exitnode/internal/protocol"
@@ -68,11 +68,16 @@ type Agent struct {
 	saveMu    sync.Mutex
 
 	stateMu       sync.Mutex
+	streams       map[*agentStream]struct{}
 	keys          []limits.AccessKey
 	defaultLimits limits.Values
 	limiters      map[string]*rate.Limiter
 	limPath       string
 	limDirty      bool
+	egressMode    string
+	egressPath    string
+	egressLast    *protocol.EgressObservation
+	egressByKey   map[string]*protocol.EgressObservation
 
 	mu   sync.Mutex
 	sess *yamux.Session
@@ -103,6 +108,14 @@ func New(cfg Config, logger *log.Logger) (*Agent, error) {
 		limiters:      make(map[string]*rate.Limiter),
 		defaultLimits: limits.Normalize(limits.Values{QuotaMB: cfg.QuotaMB, RateKBps: cfg.RateKBps, Domains: cfg.Domains}),
 		limPath:       statePath(),
+	}
+
+	if a.limPath != "" {
+		a.egressPath = filepath.Join(filepath.Dir(a.limPath), "egress-mode")
+	}
+	a.egressMode, err = egress.Load(a.egressPath)
+	if err != nil {
+		return nil, fmt.Errorf("load egress mode: %w", err)
 	}
 
 	migrated := false
@@ -316,175 +329,143 @@ func (a *Agent) session() *yamux.Session {
 
 // handleStream обслуживает одну сессию: проверяет ключ и его лимиты,
 // затем соединяется с целью и передаёт байты.
+// #GPT: принимаем только E2E-запросы и отслеживаем их с начала рукопожатия.
 func (a *Agent) handleStream(st *yamux.Stream) {
 	n := a.inFlight.Add(1)
 	defer a.inFlight.Add(-1)
+	defer st.Close()
 
 	bc := protocol.NewBufConn(st)
+	_ = st.SetDeadline(time.Now().Add(15 * time.Second))
 	if int(n) > a.cfg.MaxSessions {
 		_ = protocol.WriteJSON(bc, protocol.Reply{Code: protocol.CodeNotAllowed, Error: "узел перегружен"})
-		st.Close()
 		return
 	}
-	_ = st.SetReadDeadline(time.Now().Add(15 * time.Second))
+	flow := a.beginStream(st)
+	if flow == nil {
+		_ = protocol.WriteJSON(bc, protocol.Reply{Code: protocol.CodeNotAllowed, Error: "узел выключен пользователем"})
+		return
+	}
+	defer a.finishStream(flow)
 
 	var req protocol.OpenRequest
 	if err := protocol.ReadJSON(bc.R, &req); err != nil {
-		st.Close()
 		return
 	}
 
-	if !a.enabled.Load() {
-		_ = protocol.WriteJSON(bc, protocol.Reply{Code: protocol.CodeNotAllowed, Error: "узел выключен пользователем"})
-		st.Close()
+	if req.Host != protocol.E2EHost {
+		_ = protocol.WriteJSON(bc, protocol.Reply{
+			Code:  protocol.CodeNotAllowed,
+			Error: "требуется сквозное шифрование",
+		})
 		return
 	}
 
 	a.stateMu.Lock()
+	if flow.ctx.Err() != nil {
+		a.stateMu.Unlock()
+		return
+	}
 	idx := a.findKeyLocked(req.KeyID)
 	if idx < 0 {
 		a.stateMu.Unlock()
 		_ = protocol.WriteJSON(bc, protocol.Reply{Code: protocol.CodeNotAllowed, Error: "ключ отозван"})
-		st.Close()
 		return
 	}
+	flow.keyID = req.KeyID
 	key := &a.keys[idx]
-	a.rollKeyLocked(key)
-	over := key.OverQuota()
-	domains := key.Limits.Domains
 	label := key.Label
 	keyValue := key.Value
-	limiter := a.limiterForLocked(req.KeyID)
 	a.stateMu.Unlock()
 
-	if over {
-		_ = protocol.WriteJSON(bc, protocol.Reply{Code: protocol.CodeNotAllowed, Error: "квота трафика исчерпана"})
-		st.Close()
-		return
-	}
 	if label != "" {
 		req.Client = label
 	}
 
-	if req.Host == protocol.E2EHost {
-		a.serveE2E(bc, st, req, keyValue, domains, limiter)
-		return
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-	defer cancel()
-
-	addr, err := a.guard.Resolve(ctx, req.Host, req.Port, domains)
-	if err != nil {
-		code := protocol.CodeGeneral
-		var oe *protocol.OpenError
-		if errors.As(err, &oe) {
-			code = oe.Code
-		}
-		// GPT: клиенту — общий текст, детали (какой адрес и почему)
-		// остаются в локальном логе, чтобы не отдавать оракул.
-		a.log.Printf("сессия отклонена: %v", err)
-		_ = protocol.WriteJSON(bc, protocol.Reply{Code: code, Error: "запрос отклонён настройками узла"})
-		st.Close()
-		return
-	}
-
-	dialer := net.Dialer{Timeout: 15 * time.Second}
-	target, err := dialer.DialContext(ctx, "tcp", addr)
-	if err != nil {
-		a.log.Printf("не удалось подключиться к %q:%d: %v", req.Host, req.Port, err)
-		_ = protocol.WriteJSON(bc, protocol.Reply{Code: dialCode(err), Error: "не удалось подключиться к цели"})
-		st.Close()
-		return
-	}
-	if tc, ok := target.(*net.TCPConn); ok {
-		_ = tc.SetKeepAlive(true)
-		_ = tc.SetKeepAlivePeriod(30 * time.Second)
-	}
-
-	if err := protocol.WriteJSON(bc, protocol.Reply{OK: true}); err != nil {
-		target.Close()
-		st.Close()
-		return
-	}
-	_ = st.SetReadDeadline(time.Time{})
-
-	sessCtx, sessCancel := context.WithCancel(context.Background())
-	sess := a.reg.Add(req.Client, req.KeyID, req.Host, req.Port, bc, sessCancel)
-	defer a.reg.Remove(sess.ID)
-
-	metered := &meterConn{
-		Conn: bc,
-		onRead: func(n int64) {
-			sess.AddIn(n)
-			a.addTraffic(req.KeyID, n)
-		},
-		onWrite: func(n int64) {
-			sess.AddOut(n)
-			a.addTraffic(req.KeyID, n)
-		},
-		ctx:     sessCtx,
-		limiter: limiter,
-	}
-
-	a.log.Printf("сессия #%d (%q): %q:%d", sess.ID, req.Client, req.Host, req.Port)
-	protocol.Join(metered, target)
-	a.log.Printf("сессия #%d закрыта: принято %s, отдано %s",
-		sess.ID, humanBytes(sess.In()), humanBytes(sess.Out()))
+	a.serveE2E(bc, flow, req, keyValue)
 }
 
 // serveE2E обслуживает сквозное шифрование: шлюз видит только фиктивный
 // адрес, настоящая цель приходит внутри шифрованного потока.
-func (a *Agent) serveE2E(bc *protocol.BufConn, st *yamux.Stream, req protocol.OpenRequest, keyValue, domains string, limiter *rate.Limiter) {
+// #GPT: подтверждаем ключ клиента по внутреннему TLS перед обработкой адреса.
+// #GPT: соединение отменяет ожидание общего лимитера при закрытии любого направления.
+func (a *Agent) serveE2E(bc *protocol.BufConn, flow *agentStream, req protocol.OpenRequest, keyValue string) {
 	if err := protocol.WriteJSON(bc, protocol.Reply{OK: true}); err != nil {
-		st.Close()
 		return
 	}
-	_ = st.SetReadDeadline(time.Time{})
 
-	sec, err := secure.NewConn(bc, secure.DeriveKey(keyValue))
+	ctx, cancel := context.WithTimeout(flow.ctx, 20*time.Second)
+	defer cancel()
+
+	sec, err := secure.Server(ctx, bc, keyValue)
 	if err != nil {
-		st.Close()
+		a.log.Printf("внутренний TLS с клиентом: %v", err)
 		return
 	}
 	sbc := protocol.NewBufConn(sec)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-	defer cancel()
-
 	var inner protocol.E2EConnect
 	if err := protocol.ReadJSON(sbc.R, &inner); err != nil {
 		a.log.Printf("e2e: нет запроса цели: %v", err)
-		sec.Close()
 		return
 	}
-	if inner.Host == "" || inner.Port < 1 || inner.Port > 65535 {
+	if inner.Action == protocol.E2EPolicy && inner.Host == "" && inner.Port == 0 {
+		a.sendKeyPolicy(sbc, flow)
+		return
+	}
+	if inner.Action != "" || inner.Host == "" || inner.Port < 1 || inner.Port > 65535 {
 		a.log.Printf("e2e: неверная цель")
-		sec.Close()
+		return
+	}
+
+	a.stateMu.Lock()
+	idx := a.findKeyLocked(flow.keyID)
+	if idx < 0 || flow.ctx.Err() != nil {
+		a.stateMu.Unlock()
+		return
+	}
+	key := &a.keys[idx]
+	a.rollKeyLocked(key)
+	overQuota := key.OverQuota()
+	domains := key.Limits.Domains
+	limiter := a.limiterForLocked(flow.keyID)
+	mode := a.egressModeLocked()
+	a.stateMu.Unlock()
+	if overQuota {
+		a.log.Printf("e2e: traffic quota exhausted")
 		return
 	}
 
 	addr, err := a.guard.Resolve(ctx, inner.Host, inner.Port, domains)
 	if err != nil {
 		a.log.Printf("e2e отклонено: %v", err)
-		sec.Close()
 		return
 	}
 
-	dialer := net.Dialer{Timeout: 15 * time.Second}
-	target, err := dialer.DialContext(ctx, "tcp", addr)
+	target, route, err := egress.Dial(ctx, mode, addr)
 	if err != nil {
-		a.log.Printf("e2e: не удалось подключиться к %q:%d: %v", inner.Host, inner.Port, err)
-		sec.Close()
+		outcome := "failed"
+		if errors.Is(err, egress.ErrDirectUnavailable) {
+			outcome = "blocked"
+		}
+		a.recordEgress(flow, inner.Host, inner.Port, route, outcome)
+		a.log.Printf("egress %s for %q:%d via %s %q: %v", outcome, inner.Host, inner.Port, route.Kind, route.Interface, err)
 		return
+	}
+	defer target.Close()
+	if !a.attachTarget(flow, target) {
+		return
+	}
+	a.recordEgress(flow, inner.Host, inner.Port, route, "connected")
+	if mode == egress.Direct {
+		go a.watchDirect(flow, addr, inner.Host, inner.Port, route)
 	}
 	if tc, ok := target.(*net.TCPConn); ok {
 		_ = tc.SetKeepAlive(true)
 		_ = tc.SetKeepAlivePeriod(30 * time.Second)
 	}
 
-	sessCtx, sessCancel := context.WithCancel(context.Background())
-	sess := a.reg.Add(req.Client, req.KeyID, inner.Host, inner.Port, bc, sessCancel)
+	sess := a.reg.Add(req.Client, req.KeyID, inner.Host, inner.Port, bc, flow.cancel)
 	defer a.reg.Remove(sess.ID)
 
 	metered := &meterConn{
@@ -497,7 +478,8 @@ func (a *Agent) serveE2E(bc *protocol.BufConn, st *yamux.Stream, req protocol.Op
 			sess.AddOut(n)
 			a.addTraffic(req.KeyID, n)
 		},
-		ctx:     sessCtx,
+		ctx:     flow.ctx,
+		cancel:  flow.cancel,
 		limiter: limiter,
 	}
 
@@ -507,67 +489,36 @@ func (a *Agent) serveE2E(bc *protocol.BufConn, st *yamux.Stream, req protocol.Op
 		sess.ID, humanBytes(sess.In()), humanBytes(sess.Out()))
 }
 
-func dialCode(err error) int {
-	switch {
-	case errors.Is(err, syscall.ECONNREFUSED):
-		return protocol.CodeRefused
-	case errors.Is(err, syscall.EHOSTUNREACH), errors.Is(err, syscall.ENETUNREACH):
-		return protocol.CodeUnreachable
-	default:
-		return protocol.CodeGeneral
-	}
-}
-
-// meterConn считает байты в момент передачи, чтобы скорость обновлялась вживую,
-// и попутно тормозит поток до лимита конкретного ключа.
-type meterConn struct {
-	net.Conn
-	onRead  func(int64)
-	onWrite func(int64)
-	ctx     context.Context
-	limiter *rate.Limiter
-}
-
-func (m *meterConn) wait(n int) {
-	if m.limiter == nil || n <= 0 {
-		return
-	}
-	_ = m.limiter.WaitN(m.ctx, n)
-}
-
-func (m *meterConn) Read(p []byte) (int, error) {
-	n, err := m.Conn.Read(p)
-	if n > 0 {
-		m.onRead(int64(n))
-	}
-	return n, err
-}
-
-func (m *meterConn) Write(p []byte) (int, error) {
-	m.wait(len(p))
-	n, err := m.Conn.Write(p)
-	if n > 0 {
-		m.onWrite(int64(n))
-	}
-	return n, err
-}
-
 // Info реализует ui.Controller.
 func (a *Agent) Info() ui.Info {
+	mode, last := a.currentEgress()
 	return ui.Info{
-		Name:         a.cfg.Name,
-		Relay:        a.cfg.RelayAddr,
-		Connected:    a.connected(),
-		Enabled:      a.enabled.Load(),
-		Since:        a.started,
-		MaxSessions:  a.cfg.MaxSessions,
-		PublicSocks:  a.cfg.PublicSocks,
-		Version:      a.cfg.Version,
-		CanAutostart: desktop.AutostartSupported(),
+		Name:            a.cfg.Name,
+		Relay:           a.cfg.RelayAddr,
+		Connected:       a.connected(),
+		Enabled:         a.enabled.Load(),
+		Since:           a.started,
+		MaxSessions:     a.cfg.MaxSessions,
+		PublicSocks:     a.cfg.PublicSocks,
+		Version:         a.cfg.Version,
+		CanAutostart:    desktop.AutostartSupported(),
+		EgressMode:      mode,
+		EgressSupported: egress.Supported(),
+		LastEgress:      last,
 	}
 }
 
-func (a *Agent) SetEnabled(v bool) { a.enabled.Store(v) }
+// #GPT: выключение отменяет все потоки, включая те, которые ещё открываются.
+func (a *Agent) SetEnabled(v bool) {
+	a.stateMu.Lock()
+	a.enabled.Store(v)
+	if !v {
+		for flow := range a.streams {
+			flow.stopLocked()
+		}
+	}
+	a.stateMu.Unlock()
+}
 
 func (a *Agent) KillAll() { a.reg.KillAll() }
 
@@ -653,6 +604,7 @@ func (a *Agent) AddKey(label string) (ui.KeyView, error) {
 }
 
 // RemoveKey отзывает ключ: шлюз перестаёт пускать его владельца.
+// #GPT: закрываем потоки отозванного ключа под тем же замком, который защищает допуск.
 func (a *Agent) RemoveKey(id string) error {
 	a.stateMu.Lock()
 	found := -1
@@ -665,6 +617,12 @@ func (a *Agent) RemoveKey(id string) error {
 	if found >= 0 {
 		a.keys = append(a.keys[:found], a.keys[found+1:]...)
 		delete(a.limiters, id)
+		delete(a.egressByKey, id)
+		for flow := range a.streams {
+			if flow.keyID == id {
+				flow.stopLocked()
+			}
+		}
 	}
 	a.limDirty = true
 	a.stateMu.Unlock()

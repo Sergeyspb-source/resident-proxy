@@ -1,0 +1,15 @@
+[Unit]
+Description=Exitnode selected-domain DNS and TUN engine
+BindsTo=exitnode-route.service
+PartOf=exitnode-route.service
+After=exitnode-route.service exitnode-route-client.service
+
+[Service]
+Type=exec
+UMask=0077
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_SYS_ADMIN CAP_NET_BIND_SERVICE
+NoNewPrivileges=yes
+ExecStart=/usr/local/lib/exitnode-route/sing-box run -c /run/exitnode-route/engine.json
+ExecStartPost=/bin/bash /usr/local/lib/exitnode-route/network.sh attach
+Restart=on-failure
+RestartSec=3s

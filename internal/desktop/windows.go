@@ -3,7 +3,6 @@
 package desktop
 
 import (
-	"encoding/binary"
 	"errors"
 	"log"
 	"os"
@@ -18,6 +17,9 @@ import (
 	"fyne.io/systray"
 	"github.com/jchv/go-webview2"
 	"golang.org/x/sys/windows/registry"
+
+	"exitnode/internal/buildinfo"
+	"exitnode/internal/versionicon"
 )
 
 var win struct {
@@ -44,10 +46,16 @@ func Run(h Hooks) {
 	}
 }
 
+// GPT: Show the running build in the tray icon and its full tooltip.
 func onReady(h Hooks) {
-	systray.SetTitle("Узел выхода")
-	systray.SetTooltip("Узел выхода")
-	systray.SetIcon(iconICO())
+	title := h.Title
+	if title == "" {
+		title = "Узел выхода"
+	}
+	title += " v" + buildinfo.Version
+	systray.SetTitle(title)
+	systray.SetTooltip(title)
+	systray.SetIcon(versionicon.ICO(buildinfo.Version))
 
 	mOpen := systray.AddMenuItem("Открыть панель", "Показать окно программы")
 	toggleLabel := h.ToggleLabel
@@ -244,51 +252,4 @@ func SetAutostart(enabled bool) error {
 		cmd += " " + syscall.EscapeArg(a)
 	}
 	return k.SetStringValue(runName, cmd)
-}
-
-// iconICO рисует 32x32 зелёный круг с тёмной окантовкой.
-func iconICO() []byte {
-	const size = 32
-	pixels := make([]byte, size*size*4)
-	cx, cy := 15.5, 15.5
-	for y := 0; y < size; y++ {
-		for x := 0; x < size; x++ {
-			dx, dy := float64(x)-cx, float64(y)-cy
-			d := dx*dx + dy*dy
-			var r, g, b, a byte
-			switch {
-			case d <= 11*11:
-				r, g, b, a = 0x43, 0xd1, 0x7a, 0xff
-			case d <= 14*14:
-				r, g, b, a = 0x14, 0x17, 0x1c, 0xff
-			}
-			i := ((size-1-y)*size + x) * 4
-			pixels[i+0] = b
-			pixels[i+1] = g
-			pixels[i+2] = r
-			pixels[i+3] = a
-		}
-	}
-
-	mask := make([]byte, size*size/8)
-	img := make([]byte, 40, 40+len(pixels)+len(mask))
-	binary.LittleEndian.PutUint32(img[0:], 40)
-	binary.LittleEndian.PutUint32(img[4:], size)
-	binary.LittleEndian.PutUint32(img[8:], size*2)
-	binary.LittleEndian.PutUint16(img[12:], 1)
-	binary.LittleEndian.PutUint16(img[14:], 32)
-	binary.LittleEndian.PutUint32(img[20:], uint32(len(pixels)))
-	img = append(img, pixels...)
-	img = append(img, mask...)
-
-	out := make([]byte, 22, 22+len(img))
-	out[2] = 1
-	out[4] = 1
-	out[6] = size
-	out[7] = size
-	binary.LittleEndian.PutUint16(out[10:], 1)
-	binary.LittleEndian.PutUint16(out[12:], 32)
-	binary.LittleEndian.PutUint32(out[14:], uint32(len(img)))
-	binary.LittleEndian.PutUint32(out[18:], 22)
-	return append(out, img...)
 }

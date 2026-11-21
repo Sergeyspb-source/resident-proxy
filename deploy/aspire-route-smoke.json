@@ -1,0 +1,60 @@
+{
+  "log": {"level": "debug", "timestamp": true},
+  "network_namespaces": [
+    {"type": "unshare", "tag": "aspire-smoke", "pid_file": "netns.pid"}
+  ],
+  "dns": {
+    "servers": [
+      {"type": "udp", "tag": "host-dns", "server": "127.0.0.53"},
+      {
+        "type": "fakeip",
+        "tag": "selected-dns",
+        "inet4_range": "198.18.0.0/15",
+        "inet6_range": "fd00:198:18::/48"
+      }
+    ],
+    "rules": [
+      {
+        "domain": ["speed.cloudflare.com"],
+        "query_type": ["A", "AAAA"],
+        "action": "route",
+        "server": "selected-dns"
+      },
+      {"domain": ["speed.cloudflare.com"], "action": "predefined", "rcode": "NOERROR"}
+    ],
+    "final": "host-dns"
+  },
+  "inbounds": [
+    {
+      "type": "tun",
+      "tag": "aspire-tun",
+      "netns": "aspire-smoke",
+      "interface_name": "exitnode-test",
+      "address": ["172.19.0.1/30", "fd00:172:19::1/126"],
+      "auto_route": true,
+      "strict_route": true,
+      "dns_mode": "disabled",
+      "stack": "gvisor"
+    }
+  ],
+  "outbounds": [
+    {
+      "type": "socks",
+      "tag": "windows-pc",
+      "server": "127.0.0.1",
+      "server_port": 19080,
+      "version": "5"
+    },
+    {"type": "direct", "tag": "aspire-direct"}
+  ],
+  "route": {
+    "default_domain_resolver": "host-dns",
+    "rules": [
+      {"port": 53, "action": "hijack-dns"},
+      {"action": "sniff"},
+      {"domain": ["speed.cloudflare.com"], "network": "udp", "action": "reject"},
+      {"domain": ["speed.cloudflare.com"], "action": "route", "outbound": "windows-pc"}
+    ],
+    "final": "aspire-direct"
+  }
+}
